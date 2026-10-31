@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Comet Gravity</title>
+    <!-- アイコン用の画像は持たないので空を指定する（指定しないとブラウザが favicon.ico を取りに行って 404 になる） -->
+    <link rel="icon" href="data:,">
     <style>
         body {
             margin: 0;
@@ -44,6 +46,12 @@
         }
         #title-screen > h1 { margin-top: auto !important; }
         #start-button { margin-bottom: auto; }
+        /* マウスとタッチで操作説明を出し分ける（指で操作する端末では「指で〜」の説明だけを出す） */
+        .only-touch { display: none; }
+        @media (hover: none) and (pointer: coarse) {
+            .only-mouse { display: none !important; }
+            .only-touch { display: inline; }
+        }
         /* 下の操作説明（マウス向け）は飾りなので、ボタンに重なってもタップを横取りしないようにする */
         #title-footer { pointer-events: none; }
 
@@ -205,6 +213,7 @@
             #best-time-display { top: 64px !important; }
             #bonus-hud { top: 46px !important; }
             #dock-message { font-size: 28px !important; }
+            #bonus-flash { font-size: 30px !important; letter-spacing: 3px !important; }
             /* CPUバーは右端に小さく半透明で置く（幅の狭い iPhone SE などでブロックに重なって見えにくかった） */
             #cpu-ghost { right: 4px !important; transform: translateY(-50%) scale(0.7) !important; transform-origin: right center; opacity: 0.75; }
         }
@@ -311,15 +320,17 @@
             HOW TO PLAY</h2>
         <div class="control-list">
             <div class="control-row">
-                <div class="control-key">左クリック＋ドラッグ</div>
+                <div class="control-key"><span class="only-mouse">左クリック＋ドラッグ</span><span class="only-touch">指でドラッグ</span></div>
                 <div class="control-text">ブロックをつかんで動かす<small>近づけると自動でくっつく。くっついた塊はまとめて動かせる</small></div>
             </div>
-            <div class="control-row">
+            <!-- 回転はマウスの右ボタンだけの操作なので、タッチの画面では出さない。
+                 くっつくかどうかは中心どうしの距離だけで決まるので、向きは見た目だけ（以前の説明「くっつける面を合わせる」は誤り） -->
+            <div class="control-row only-mouse">
                 <div class="control-key">右クリック＋ドラッグ</div>
-                <div class="control-text">ブロックを回転させる<small>向きを変えて、くっつける面を合わせる</small></div>
+                <div class="control-text">ブロックを回転させる<small>見た目の向きが変わるだけ（くっつき方には関係しない）</small></div>
             </div>
             <div class="control-row">
-                <div class="control-key">マウスホイール</div>
+                <div class="control-key"><span class="only-mouse">マウスホイール</span><span class="only-touch">2本の指でつまむ</span></div>
                 <div class="control-text">カメラの拡大・縮小<small>視点は真正面に固定（何もない所をドラッグしても画面は回らない）</small></div>
             </div>
         </div>
@@ -1902,14 +1913,15 @@
         (function injectFeatureStyles() {
             const css = `
             .sub-menu-button { font-size: 18px; padding: 12px 40px; background: transparent; color: #66ccff; border: 2px solid #66ccff; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 340px; }
-            .sub-menu-button:hover { background: #66ccff; color: #000; }
+            /* ホバーの色はマウスのある端末だけ（指で押すと離したあともホバー状態が残り、文字が背景に溶けて読めなくなるため） */
+            @media (hover: hover) { .sub-menu-button:hover { background: #66ccff; color: #000; } }
             .cg-panel { position: fixed; z-index: 220; font-family: monospace; color: #cfe6dd; background: rgba(4, 10, 16, 0.92); border: 1px solid #1f6f5a; box-sizing: border-box; }
             .cg-panel h3 { margin: 0 0 10px; color: #00ffaa; letter-spacing: 3px; font-size: 15px; font-weight: normal; }
             .cg-panel h4 { margin: 14px 0 6px; color: #7fdcc0; font-size: 12px; letter-spacing: 2px; font-weight: normal; }
             .cg-btn { font-family: monospace; font-size: 12px; letter-spacing: 1px; padding: 6px 10px; margin: 2px; background: transparent; color: #00ffaa; border: 1px solid #00ffaa; cursor: pointer; }
-            .cg-btn:hover, .cg-btn.on { background: #00ffaa; color: #000; }
+            .cg-btn.on { background: #00ffaa; color: #000; }
+            @media (hover: hover) { .cg-btn:hover { background: #00ffaa; color: #000; } .cg-btn.warn:hover { background: #ff6644; color: #000; } .cg-hud-btn:hover { background: #66ccff; color: #000; } }
             .cg-btn.warn { color: #ff6644; border-color: #ff6644; }
-            .cg-btn.warn:hover { background: #ff6644; color: #000; }
             .cg-btn:disabled { opacity: 0.35; cursor: default; }
             .cg-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 12px; }
             .cg-row label { width: 92px; color: #8fa3b0; }
@@ -1922,8 +1934,21 @@
             .cg-hint { font-size: 11px; color: #7e93a0; line-height: 1.6; }
             #cg-toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 500; font-family: monospace; color: #000; background: #ffcc00; padding: 10px 22px; letter-spacing: 2px; font-size: 14px; opacity: 0; transition: opacity 0.4s; pointer-events: none; box-shadow: 0 0 20px #ffaa00; }
             .cg-hud-btn { position: fixed; top: 20px; font-size: 14px; padding: 12px 16px; background: transparent; color: #66ccff; border: 2px solid #66ccff; cursor: pointer; font-family: monospace; letter-spacing: 2px; z-index: 50; display: none; }
-            .cg-hud-btn:hover { background: #66ccff; color: #000; }
-            @media (max-width: 700px) { .cg-panel { font-size: 11px; } .sub-menu-button { min-width: 0; width: 90vw; } }
+            #editor-panel { top: 0; left: 0; width: 300px; height: 100vh; overflow-y: auto; padding: 14px; }
+            #editor-panel-toggle { display: none; }
+            @media (max-width: 700px) {
+                .cg-panel { font-size: 11px; }
+                .sub-menu-button { min-width: 0; width: 86vw; }
+                /* エディター：パネルは画面の下45%のシート。たたむと盤面を全面で使える */
+                #editor-panel { top: auto; bottom: 0; width: 100vw; height: 45vh; padding: 10px 12px; border-left: none; border-right: none; }
+                #editor-panel.collapsed { display: none; }
+                #editor-panel-toggle { display: block; position: fixed; top: 8px; right: 8px; z-index: 230; background: rgba(4, 10, 16, 0.9); color: #00ffaa; }
+                #editor-panel .cg-row label { width: 76px; }
+                /* 記録画面の表：文字と余白を詰め、実績の日付列は省く */
+                #records-panel .cg-table { font-size: 11px; }
+                #records-panel .cg-table th, #records-panel .cg-table td { padding: 3px 5px; }
+                #records-panel .cg-ach td:nth-child(4) { display: none; }
+            }
             `;
             const st = document.createElement('style');
             st.textContent = css;
@@ -2281,9 +2306,16 @@
             editor.stage = stage ? JSON.parse(JSON.stringify(stage)) : (editor.stage || newEditorStage());
             editor.selected = null;
             // 真上から見た固定視点にする（置いた位置とゲーム中の位置を一致させるため）。
-            // 左のパネル（幅300px）に盤面の左端が隠れないよう、視点を少し左へずらして盤面を右に寄せる
-            camera.position.set(-2.5, 0, 16); camera.lookAt(-2.5, 0, 0);
-            if (controls) { controls.target.set(-2.5, 0, 0); controls.enabled = false; controls.update(); }
+            // PC: 左のパネル（幅300px）に盤面の左端が隠れないよう、視点を左へずらして盤面を右に寄せる。
+            // スマホ: パネルは画面の下半分に出すので、視点を下へずらして盤面を画面の上半分に収める
+            const narrow = window.innerWidth <= 700;
+            let cx = -2.5, cy = 0, cz = 16;
+            if (narrow) {
+                cx = 0; cz = fitCameraDistance();
+                cy = -0.45 * cz * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+            }
+            camera.position.set(cx, cy, cz); camera.lookAt(cx, cy, 0);
+            if (controls) { controls.target.set(cx, cy, 0); controls.enabled = false; controls.update(); }
             anchor.visible = true;
             buildEditorPanel();
             refreshEditor();
@@ -2293,6 +2325,7 @@
             disposePreview(editor.preview && editor.preview.group);
             editor.preview = null;
             if (editor.panel) { editor.panel.remove(); editor.panel = null; }
+            const tg = document.getElementById('editor-panel-toggle'); if (tg) tg.remove();
             camera.position.set(0, 0, fitCameraDistance()); camera.lookAt(0, 0, 0); // ゲーム本来の初期視点に戻す
             if (controls) { controls.target.set(0, 0, 0); controls.enabled = true; controls.update(); }
             inputLocked = false;
@@ -2373,9 +2406,20 @@
         }
         function buildEditorPanel() {
             if (editor.panel) editor.panel.remove();
-            const p = el('div', { class: 'cg-panel', id: 'editor-panel', style: 'top: 0; left: 0; width: 300px; height: 100vh; overflow-y: auto; padding: 14px;' });
+            // 位置と大きさは CSS（#editor-panel）で決める。スマホでは画面の下半分のシートになる
+            const p = el('div', { class: 'cg-panel', id: 'editor-panel' });
             editor.panel = p;
             document.body.appendChild(p);
+            // スマホ用：パネルをたたんで盤面を広く見るボタン
+            if (!document.getElementById('editor-panel-toggle')) {
+                const t = el('button', { class: 'cg-btn', id: 'editor-panel-toggle', text: 'パネルを隠す', onclick: () => {
+                    const pn = document.getElementById('editor-panel');
+                    if (!pn) return;
+                    const hidden = pn.classList.toggle('collapsed');
+                    t.textContent = hidden ? 'パネルを出す' : 'パネルを隠す';
+                } });
+                document.body.appendChild(t);
+            }
         }
         // 中身はステージが変わるたびに作り直す（項目数が少ないので差分更新より単純さを優先）
         function refreshEditor(previewOnly) {
@@ -2394,9 +2438,9 @@
             const nameInp = el('input', { type: 'text', value: editor.stage.name || '', maxlength: '40' });
             nameInp.addEventListener('change', () => { editor.stage.name = nameInp.value.slice(0, 40); });
             p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: '名前' }), nameInp]));
-            p.appendChild(el('h4', { text: '置くもの（左クリック）' }));
+            p.appendChild(el('h4', { text: '置くもの' }));
             p.appendChild(el('div', {}, EDITOR_TOOLS.map(([id, name]) => el('button', { class: 'cg-btn' + (editor.tool === id ? ' on' : ''), text: name, onclick: () => { editor.tool = id; refreshEditor(); } }))));
-            p.appendChild(el('div', { class: 'cg-hint', text: '空いている所をクリックで追加、物をクリックで選択、ドラッグで移動、右クリックで削除。水星は軌道上の位置をドラッグすると軌道半径と開始位置が変わる。' }));
+            p.appendChild(el('div', { class: 'cg-hint', text: '空いている所をクリック（タップ）で追加、物を押して選択、そのままドラッグで移動。消すときは右クリックか、選んで「削除」。水星は軌道上の位置をドラッグすると軌道半径と開始位置が変わる。' }));
             // 選択中の項目のパラメータ
             const sel = editor.selected;
             if (sel) {
@@ -2737,7 +2781,7 @@
             p.appendChild(el('h3', { text: 'RECORDS', style: 'font-size: 28px;' }));
             // 実績
             p.appendChild(el('h4', { text: `実績（${Object.keys(save.achievements).length} / ${ACHIEVEMENTS.length}）` }));
-            const ach = el('table', { class: 'cg-table' });
+            const ach = el('table', { class: 'cg-table cg-ach' });
             ACHIEVEMENTS.forEach(a => {
                 const got = save.achievements[a.id];
                 ach.appendChild(el('tr', {}, [
