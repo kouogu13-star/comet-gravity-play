@@ -429,6 +429,7 @@
         }
         const physicsHooks = []; // 物理1ステップごとに呼ぶ（力を加える系。引数は FIXED_DT）
         const frameHooks = [];   // 描画1回ごとに呼ぶ（記録・表示系。引数は経過秒）
+        const boardCleanupHooks = []; // 盤面を片付けるとき（clearBoard）に呼ぶ。追加機能が作った見た目の後始末用
         let inputLocked = false; // エディター・リプレイ中はゲームのドラッグ操作を止める
         let customStageActive = false; // エディターで作ったステージをテストプレイ中か
         let customStageData = null;
@@ -587,6 +588,7 @@
             particles.forEach(p => { scene.remove(p); p.material.dispose(); });
             particles.length = 0;
             physicsAccumulator = 0;
+            boardCleanupHooks.forEach(fn => fn());
         }
         // 障害物（惑星）生成：mars = 静的な壁 / mercury = 周回する壁 / jupiter = 引力ゾーン（静的、近づくと引っ張られ、本体に触れるとmarsと同じ即死判定）
         // data 例: { type: 'mars', pos: [x, y, z], radius: 1.2 }
@@ -596,12 +598,13 @@
             const radius = data.radius || 1.2;
             const isOrbiting = data.type === 'mercury';
             // repulsor = 反発フィールド（追加ギミック）。触れても死なず、範囲内のブロックを外向きに押し返す
-            const colorMap = { mars: 0xcc4422, mercury: 0x999988, jupiter: 0xddaa55, repulsor: 0x33bbff };
+            const colorMap = { mars: 0xcc4422, mercury: 0x999988, jupiter: 0xddaa55, repulsor: 0x33bbff, warp: 0x9955ff, gravfield: 0x44dd88 };
             const color = colorMap[data.type] || 0xcc4422;
             const geometry = new THREE.SphereGeometry(radius, 24, 24);
             const material = new THREE.MeshPhongMaterial({ color: color, emissive: color, emissiveIntensity: 0.35, shininess: 20 });
             const mesh = new THREE.Mesh(geometry, material);
-            const ringColor = data.type === 'jupiter' ? 0xffcc88 : data.type === 'repulsor' ? 0x66ddff : 0xff4422;
+            // 飾りの輪の色。赤は「触れると墜落する」の合図なので、墜落しない障害物には使わない
+            const ringColor = { jupiter: 0xffcc88, repulsor: 0x66ddff, warp: 0xcc99ff, gravfield: 0x66eeaa }[data.type] || 0xff4422;
             const ringGeo = new THREE.RingGeometry(radius * 1.2, radius * 1.35, 32);
             const ringMat = new THREE.MeshBasicMaterial({ color: ringColor, side: THREE.DoubleSide, transparent: true, opacity: 0.4 });
             const ring = new THREE.Mesh(ringGeo, ringMat);
@@ -738,6 +741,8 @@
         }
         const obstacles = [];
         const OBSTACLE_HIT_MARGIN = 0.9; // ブロック半径ぶんの当たり判定マージン
+        // 触れても墜落しない障害物（追加ギミック）。即死判定の対象から外す
+        const NON_LETHAL_TYPES = ['repulsor', 'warp', 'gravfield'];
         const SPAWN_PROTECTION_SEC = 1.5; // ステージ入場直後、即死判定を止めておく秒数（操作する間もない事故死の防止）
         // --- 軌跡（トレイル）のパラメータ ---
         const TRAIL_MIN_GAP = 0.01;        // これ未満しか動いていないフレームは記録しない（停止中に点が溜まるのを防ぐ）
@@ -763,7 +768,7 @@
             const grace = DIFFICULTY_SETTINGS[currentDifficulty].graceSec;
             let anyDanger = false;
             for (const b of blocks) {
-                const touching = obstacles.some(o => o.data.type !== 'repulsor' && b.body.position.distanceTo(o.mesh.position) < o.radius + OBSTACLE_HIT_MARGIN);
+                const touching = obstacles.some(o => !NON_LETHAL_TYPES.includes(o.data.type) && b.body.position.distanceTo(o.mesh.position) < o.radius + OBSTACLE_HIT_MARGIN);
                 if (touching) {
                     if (!b.dangerStart) b.dangerStart = Date.now();
                     anyDanger = true;
@@ -816,6 +821,10 @@
         }
         let dragging = null;
         let dragGroup = [];
+        // 指（カーソル）が指している位置。重いブロックの塊は、ここへ毎フレーム少しずつ追いつく
+        let dragTarget = null;
+        // 塊の「追従のしやすさ」。1 ならカーソルにぴったりつく（従来どおり）。1未満なら追加機能側が毎フレーム追いつかせる
+        let dragFollowFactor = group => 1;
         let rotating = null;
         let dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
         let mouseHistory = [];
@@ -898,17 +907,20 @@
                     b.body.velocity.set(0, 0, 0);
                     b.body.angularVelocity.set(0, 0, 0);
                 });
-                const delta = new CANNON.Vec3(
-                    intersectPoint.x - dragging.body.position.x,
-                    intersectPoint.y - dragging.body.position.y,
-                    intersectPoint.z - dragging.body.position.z
-                );
-                dragging.body.position.copy(intersectPoint);
-                dragGroup.forEach(b => {
-                    b.body.position.x += delta.x;
-                    b.body.position.y += delta.y;
-                    b.body.position.z += delta.z;
-                });
+                dragTarget = intersectPoint.clone();
+                if (dragFollowFactor([dragging].concat(dragGroup)) >= 1) {
+                    const delta = new CANNON.Vec3(
+                        intersectPoint.x - dragging.body.position.x,
+                        intersectPoint.y - dragging.body.position.y,
+                        intersectPoint.z - dragging.body.position.z
+                    );
+                    dragging.body.position.copy(intersectPoint);
+                    dragGroup.forEach(b => {
+                        b.body.position.x += delta.x;
+                        b.body.position.y += delta.y;
+                        b.body.position.z += delta.z;
+                    });
+                }
                 attemptDock(dragging);
                 mouseHistory.push({ x: e.clientX, y: e.clientY, t: Date.now() });
                 if (mouseHistory.length > 5) mouseHistory.shift();
@@ -920,10 +932,11 @@
         }
         function onMouseUp(e) {
             if (dragging) {
-                dragging.body.mass = 1;
+                // 離したら元の重さに戻す（重量ブロックは 1 ではない）
+                dragging.body.mass = dragging.baseMass || 1;
                 dragging.body.updateMassProperties();
                 dragGroup.forEach(b => {
-                    b.body.mass = 1;
+                    b.body.mass = b.baseMass || 1;
                     b.body.updateMassProperties();
                 });
                 attemptDock(dragging);
@@ -934,12 +947,15 @@
                     if (dt > 0) {
                         const dx = (last.x - first.x) / window.innerWidth;
                         const dy = (last.y - first.y) / window.innerHeight;
-                        dragging.body.velocity.set(dx * 10, -dy * 10, 0);
+                        // 投げたときの勢いは重さで割る（重いブロックは飛びにくい）
+                        const w = dragging.baseMass || 1;
+                        dragging.body.velocity.set(dx * 10 / w, -dy * 10 / w, 0);
                         dragging.body.angularVelocity.set(dy * 2, dx * 2, 0);
                     }
                 }
                 dragging = null;
                 dragGroup = [];
+                dragTarget = null;
                 mouseHistory = [];
             }
             rotating = null;
@@ -1171,6 +1187,21 @@
             const dyingAt = sec => graces.filter(g => sec > g.sec).map(g => g.label);
             const push = (level, rule, detail, dies) => issues.push({ level, stage: label, rule, detail, dies });
             obstacles.forEach(o => {
+                if (o.type === 'warp') {
+                    // ワープの出口が墜落圏の中だと、通ったブロックがそのまま墜落する
+                    obstacles.filter(x => !['repulsor', 'warp', 'gravfield'].includes(x.type)).forEach(x => {
+                        const xp = x.type === 'mercury' ? null : x.pos;
+                        if (xp && Math.hypot(xp[0] - o.exit[0], xp[1] - o.exit[1]) < x.radius + OBSTACLE_HIT_MARGIN + 0.5) {
+                            push('注意', 'ワープ出口が墜落圏の近く', `出口(${o.exit[0]},${o.exit[1]})が ${x.type} に近い`, []);
+                        }
+                    });
+                    return;
+                }
+                if (o.type === 'gravfield') {
+                    const dAnchor = Math.hypot(o.pos[0], o.pos[1]);
+                    if (dAnchor < (o.range || 3) + 2.5) push('注意', 'ゴールに重力フィールドが届く', `範囲(${o.range})がゴール圏に掛かる。流されて止まりにくい恐れ`, []);
+                    return;
+                }
                 if (o.type === 'repulsor') {
                     // 反発フィールドは死なないが、ゴール（アンカー）を範囲に含むと押し返されてドッキングできない恐れがある
                     const dAnchor = Math.hypot(o.pos[0], o.pos[1]);
@@ -1303,6 +1334,8 @@
             if (document.hidden) hiddenAt = Date.now();
             gameStarted = true;
             blocks.forEach(b => { b.body.velocity.set((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 0); });
+            // 追加機能（重量ブロック・磁力・ワープの見た目など）がステージの内容に合わせて準備するための合図
+            emitGameEvent('stageLoaded', { stageData });
         }
         // 記録・リプレイ用の「今どのステージか」。本編は 1〜9、裏は SECRET、自作は CUSTOM
         function currentStageLabel() {
@@ -2082,7 +2115,7 @@
         const STAGE_FORMAT = 'comet-gravity-stage';
         const STAGE_FORMAT_VERSION = 1;
         const STAGE_LIMITS = { coord: 15, minBlocks: 2, maxBlocks: 40, maxObstacles: 12 };
-        const OBSTACLE_TYPES = ['mars', 'mercury', 'jupiter', 'repulsor'];
+        const OBSTACLE_TYPES = ['mars', 'mercury', 'jupiter', 'repulsor', 'warp', 'gravfield'];
         function normalizeStage(raw) {
             const errors = [];
             const out = { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: '', blocks: [], obstacles: [] };
@@ -2102,7 +2135,12 @@
                 raw.blocks.slice(0, STAGE_LIMITS.maxBlocks).forEach((b, i) => {
                     const pos = vec(b && b.pos, `ブロック${i}`);
                     const color = (b && Number.isInteger(b.color) && b.color >= 0 && b.color <= 0xffffff) ? b.color : 0xffffff;
-                    if (pos) out.blocks.push({ pos, color });
+                    if (!pos) return;
+                    const blk = { pos, color };
+                    // 新ギミック：重量ブロック（heavy）と磁力ブロック（magnet: 'N' か 'S'）。それ以外の値は捨てる
+                    if (b.heavy === true) blk.heavy = true;
+                    if (b.magnet === 'N' || b.magnet === 'S') blk.magnet = b.magnet;
+                    out.blocks.push(blk);
                 });
             }
             const obs = raw.obstacles === undefined ? [] : raw.obstacles;
@@ -2126,6 +2164,17 @@
                     if (o.type === 'jupiter') {
                         if (!inRange(o.gravityRange, 1, 12) || o.gravityRange <= r) errors.push(`${what}: 引力圏は半径より大きく12以下`);
                         item.gravityRange = o.gravityRange;
+                    }
+                    if (o.type === 'warp') {
+                        const ex = vec(o.exit, what + 'の出口');
+                        item.exit = ex || [0, 0, 0];
+                        item.keepVelocity = o.keepVelocity !== false;
+                        if (ex && Math.hypot(ex[0] - item.pos[0], ex[1] - item.pos[1]) < r * 2 + 1) errors.push(`${what}: 入口と出口が近すぎる`);
+                    }
+                    if (o.type === 'gravfield') {
+                        if (!inRange(o.range, 1, 8)) errors.push(`${what}: 範囲は1〜8`);
+                        if (!inRange(o.strength, 0.5, 8)) errors.push(`${what}: 強さは0.5〜8`);
+                        item.range = o.range; item.strength = o.strength; item.angle = isNum(o.angle) ? ((o.angle % 360) + 360) % 360 : 270;
                     }
                     if (o.type === 'repulsor') {
                         if (!inRange(o.range, 1, 10)) errors.push(`${what}: 反発範囲は1〜10`);
@@ -2185,7 +2234,7 @@
             for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0)); }
             return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
         }
-        const OBSTACLE_PREVIEW_COLOR = { mars: 0xcc4422, mercury: 0x999988, jupiter: 0xddaa55, repulsor: 0x33bbff };
+        const OBSTACLE_PREVIEW_COLOR = { mars: 0xcc4422, mercury: 0x999988, jupiter: 0xddaa55, repulsor: 0x33bbff, warp: 0x9955ff, gravfield: 0x44dd88 };
         function mercuryPos(o, t) {
             const a = t * (o.speed || 0.8) + (o.phase || 0);
             return [o.center[0] + Math.cos(a) * o.orbitRadius, o.center[1] + Math.sin(a) * o.orbitRadius];
@@ -2195,7 +2244,8 @@
             opts = opts || {};
             const group = new THREE.Group();
             const blockMeshes = (stage.blocks || []).map(b => {
-                const m = makePreviewBlock(b.color, opts.blockOpacity === undefined ? 1 : opts.blockOpacity);
+                const m = makePreviewBlock(gimmickBlockColor(b), opts.blockOpacity === undefined ? 1 : opts.blockOpacity);
+                if (b.heavy) m.scale.setScalar(HEAVY_SCALE);
                 m.position.set(b.pos[0], b.pos[1], 0);
                 group.add(m);
                 return m;
@@ -2207,7 +2257,9 @@
                 const g = new THREE.Group();
                 g.add(m);
                 // 墜落する範囲（本体＋当たり判定の余白）を赤い輪で示す。反発フィールドは死なないので出さない
-                if (o.type !== 'repulsor') g.add(circleLine(o.radius + OBSTACLE_HIT_MARGIN, 0xff3322, 0.5));
+                if (!NON_LETHAL_TYPES.includes(o.type)) g.add(circleLine(o.radius + OBSTACLE_HIT_MARGIN, 0xff3322, 0.5));
+                if (o.type === 'warp') { g.add(circleLine(o.radius, 0xcc99ff, 0.9)); group.add(makeWarpExit(o)); }
+                if (o.type === 'gravfield') { g.add(circleLine(o.range, 0x44dd88, 0.5)); g.add(makeFieldArrow(o)); }
                 if (o.type === 'jupiter') g.add(circleLine(o.gravityRange, 0xffcc88, 0.35));
                 if (o.type === 'repulsor') g.add(circleLine(o.range, 0x66ddff, 0.5));
                 if (o.type === 'mercury') {
@@ -2237,6 +2289,7 @@
                 const kinds = ['mars', 'mercury'];
                 if (p.jupiter) kinds.push('jupiter');
                 if (p.repulsor) kinds.push('repulsor');
+                if (p.extra) kinds.push('warp', 'gravfield');
                 for (let i = 0; i < p.obstacles; i++) {
                     const type = kinds[Math.floor(Math.random() * kinds.length)];
                     const ang = rnd(0, Math.PI * 2), dist = rnd(4.5, 8);
@@ -2245,16 +2298,21 @@
                     if (type === 'mercury') stage.obstacles.push({ type, center: [0, 0, 0], orbitRadius: +rnd(4.5, 7).toFixed(1), speed: +(rnd(0.6, 1.1) * (Math.random() < 0.5 ? -1 : 1)).toFixed(2), phase: +rnd(0, 6.28).toFixed(2), radius: 0.7 });
                     if (type === 'jupiter') stage.obstacles.push({ type, pos: [+(Math.cos(ang) * 7).toFixed(1), +(Math.sin(ang) * 5.5).toFixed(1), 0], radius: 1.3, gravityRange: 5 });
                     if (type === 'repulsor') stage.obstacles.push({ type, pos, radius: 0.6, range: 3, strength: 4 });
+                    if (type === 'gravfield') stage.obstacles.push({ type, pos, radius: 0.5, range: 2.5, strength: 2, angle: Math.round(rnd(0, 360)) });
+                    if (type === 'warp') { const a2 = ang + Math.PI * rnd(0.6, 1.4); stage.obstacles.push({ type, pos, radius: 0.8, exit: [+(Math.cos(a2) * 5).toFixed(1), +(Math.sin(a2) * 4).toFixed(1), 0], keepVelocity: true }); }
                 }
                 for (let i = 0; i < p.blocks; i++) {
                     const ang = i / p.blocks * Math.PI * 2 + rnd(-0.2, 0.2), dist = rnd(7.5, 10.5);
-                    stage.blocks.push({ pos: [+(Math.cos(ang) * dist).toFixed(1), +(Math.sin(ang) * dist * 0.8).toFixed(1), 0], color: BLOCK_PALETTE[i % BLOCK_PALETTE.length] });
+                    const nb = { pos: [+(Math.cos(ang) * dist).toFixed(1), +(Math.sin(ang) * dist * 0.8).toFixed(1), 0], color: BLOCK_PALETTE[i % BLOCK_PALETTE.length] };
+                    if (p.extra && Math.random() < 0.2) nb.heavy = true;
+                    else if (p.extra && Math.random() < 0.25) nb.magnet = Math.random() < 0.5 ? 'N' : 'S';
+                    stage.blocks.push(nb);
                 }
                 const norm = normalizeStage(stage);
                 if (!norm.stage) continue;
                 const issues = validateStageData(norm.stage, 'RANDOM');
                 // 致命に加えて「反発がゴールに届く」も捨てる（押し返されてドッキングできない恐れがあるため、自動では作らない）
-                if (issues.some(x => x.level === '致命' || x.rule === 'ゴールに反発が届く')) continue;
+                if (issues.some(x => x.level === '致命' || x.rule === 'ゴールに反発が届く' || x.rule === 'ゴールに重力フィールドが届く' || x.rule === 'ワープ出口が墜落圏の近く')) continue;
                 // ブロック同士が最初からくっついていたら作り直す（1.5未満で自動連結される）
                 const bs = norm.stage.blocks;
                 let tooClose = false;
@@ -2286,7 +2344,8 @@
             colorIndex: 3, testDifficulty: 'easy', savedCamera: null
         };
         const EDITOR_TOOLS = [
-            ['block', 'ブロック'], ['mars', '火星'], ['mercury', '水星'], ['jupiter', '木星'], ['repulsor', '反発'], ['select', '選択']
+            ['block', 'ブロック'], ['heavy', '重いブロック'], ['magnet', '磁石ブロック'], ['mars', '火星'], ['mercury', '水星'], ['jupiter', '木星'],
+            ['repulsor', '反発'], ['warp', 'ワープ'], ['gravfield', '重力場'], ['select', '選択']
         ];
         function newEditorStage() {
             return { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: 'MY STAGE', blocks: [
@@ -2352,9 +2411,12 @@
         }
         function addItem(pt) {
             const t = editor.tool;
-            if (t === 'block') {
+            if (t === 'block' || t === 'heavy' || t === 'magnet') {
                 if (editor.stage.blocks.length >= STAGE_LIMITS.maxBlocks) { toast(`ブロックは${STAGE_LIMITS.maxBlocks}個まで`); return null; }
-                editor.stage.blocks.push({ pos: [pt[0], pt[1], 0], color: BLOCK_PALETTE[editor.colorIndex++ % BLOCK_PALETTE.length] });
+                const nb = { pos: [pt[0], pt[1], 0], color: BLOCK_PALETTE[editor.colorIndex++ % BLOCK_PALETTE.length] };
+                if (t === 'heavy') nb.heavy = true;
+                if (t === 'magnet') nb.magnet = (editor.stage.blocks.filter(b => b.magnet).length % 2 === 0) ? 'N' : 'S'; // N と S を交互に置く
+                editor.stage.blocks.push(nb);
                 return { kind: 'block', index: editor.stage.blocks.length - 1 };
             }
             if (editor.stage.obstacles.length >= STAGE_LIMITS.maxObstacles) { toast(`障害物は${STAGE_LIMITS.maxObstacles}個まで`); return null; }
@@ -2362,6 +2424,8 @@
             if (t === 'mars') o = { type: 'mars', pos: [pt[0], pt[1], 0], radius: 1.2 };
             if (t === 'jupiter') o = { type: 'jupiter', pos: [pt[0], pt[1], 0], radius: 1.4, gravityRange: 5 };
             if (t === 'repulsor') o = { type: 'repulsor', pos: [pt[0], pt[1], 0], radius: 0.6, range: 3, strength: 4 };
+            if (t === 'warp') o = { type: 'warp', pos: [pt[0], pt[1], 0], radius: 0.8, exit: [+(-pt[0] * 0.5).toFixed(1), +(-pt[1] * 0.5).toFixed(1), 0], keepVelocity: true };
+            if (t === 'gravfield') o = { type: 'gravfield', pos: [pt[0], pt[1], 0], radius: 0.5, range: 2.5, strength: 2, angle: 270 };
             if (t === 'mercury') o = { type: 'mercury', center: [0, 0, 0], orbitRadius: Math.max(1, +Math.hypot(pt[0], pt[1]).toFixed(1)), speed: 0.8, phase: +Math.atan2(pt[1], pt[0]).toFixed(2), radius: 0.8 };
             if (!o) return null;
             editor.stage.obstacles.push(o);
@@ -2451,9 +2515,14 @@
                     p.appendChild(editorInput('x', b.pos[0], 0.1, v => { b.pos[0] = v; }));
                     p.appendChild(editorInput('y', b.pos[1], 0.1, v => { b.pos[1] = v; }));
                     p.appendChild(el('button', { class: 'cg-btn', text: '色を変える', onclick: () => { b.color = BLOCK_PALETTE[(BLOCK_PALETTE.indexOf(b.color) + 1) % BLOCK_PALETTE.length]; refreshEditor(); } }));
+                    // 種類：ふつう / 重い / 磁石N / 磁石S
+                    const kind = b.heavy ? 'heavy' : b.magnet === 'N' ? 'N' : b.magnet === 'S' ? 'S' : 'normal';
+                    const kindSel = el('select', {}, [['normal', 'ふつう'], ['heavy', '重い（動かしにくい）'], ['N', '磁石 N'], ['S', '磁石 S']].map(([v, l]) => { const o = el('option', { value: v, text: l }); if (v === kind) o.selected = true; return o; }));
+                    kindSel.addEventListener('change', () => { delete b.heavy; delete b.magnet; if (kindSel.value === 'heavy') b.heavy = true; if (kindSel.value === 'N' || kindSel.value === 'S') b.magnet = kindSel.value; refreshEditor(); });
+                    p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: '種類' }), kindSel]));
                 } else {
                     const o = editor.stage.obstacles[sel.index];
-                    const names = { mars: '火星（固定・触れ続けると墜落）', mercury: '水星（周回・触れ続けると墜落）', jupiter: '木星（引力・本体で墜落）', repulsor: '反発フィールド（押し返す・墜落しない）' };
+                    const names = { mars: '火星（固定・触れ続けると墜落）', mercury: '水星（周回・触れ続けると墜落）', jupiter: '木星（引力・本体で墜落）', repulsor: '反発フィールド（押し返す・墜落しない）', warp: 'ワープゲート（入口に入った塊を出口へ移す・墜落しない）', gravfield: '重力フィールド（範囲内を一方向へ流す・墜落しない）' };
                     p.appendChild(el('div', { class: 'cg-hint', text: names[o.type] }));
                     if (o.type === 'mercury') {
                         p.appendChild(editorInput('軌道半径', o.orbitRadius, 0.1, v => { o.orbitRadius = v; }));
@@ -2465,6 +2534,18 @@
                     }
                     p.appendChild(editorInput('半径', o.radius, 0.1, v => { o.radius = v; }));
                     if (o.type === 'jupiter') p.appendChild(editorInput('引力圏', o.gravityRange, 0.5, v => { o.gravityRange = v; }));
+                    if (o.type === 'warp') {
+                        p.appendChild(editorInput('出口 x', o.exit[0], 0.1, v => { o.exit[0] = v; }));
+                        p.appendChild(editorInput('出口 y', o.exit[1], 0.1, v => { o.exit[1] = v; }));
+                        const kv = el('select', {}, [['true', '勢いを保つ'], ['false', '出口で止まる']].map(([v, l]) => { const op = el('option', { value: v, text: l }); if (String(o.keepVelocity !== false) === v) op.selected = true; return op; }));
+                        kv.addEventListener('change', () => { o.keepVelocity = kv.value === 'true'; refreshEditor(); });
+                        p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: '出たあと' }), kv]));
+                    }
+                    if (o.type === 'gravfield') {
+                        p.appendChild(editorInput('範囲', o.range, 0.5, v => { o.range = v; }));
+                        p.appendChild(editorInput('強さ', o.strength, 0.5, v => { o.strength = v; }));
+                        p.appendChild(editorInput('向き(度)', o.angle, 15, v => { o.angle = v; }));
+                    }
                     if (o.type === 'repulsor') {
                         p.appendChild(editorInput('反発範囲', o.range, 0.5, v => { o.range = v; }));
                         p.appendChild(editorInput('反発の強さ', o.strength, 0.5, v => { o.strength = v; }));
@@ -2521,11 +2602,15 @@
             p.appendChild(el('div', {}, [
                 el('button', { class: 'cg-btn', text: '新規', onclick: () => { editor.stage = newEditorStage(); editor.selected = null; refreshEditor(); } }),
                 el('button', { class: 'cg-btn', text: 'ランダム生成', onclick: () => {
-                    const g = generateStage({ blocks: 5 + Math.floor(Math.random() * 5), obstacles: 1 + Math.floor(Math.random() * 3), jupiter: true, repulsor: true });
+                    const g = generateStage({ blocks: 5 + Math.floor(Math.random() * 5), obstacles: 1 + Math.floor(Math.random() * 3), jupiter: true, repulsor: true, extra: true });
                     if (!g) { toast('条件に合う配置が作れなかった'); return; }
                     editor.stage = g.stage; editor.selected = null; refreshEditor(); toast(`生成した（${g.attempts}回目で検証を通過）`);
                 } })
             ]));
+            const sampleSel = el('select', {}, GIMMICK_SAMPLES.map((s, i) => el('option', { value: String(i), text: '見本: ' + s.name })));
+            p.appendChild(el('div', { class: 'cg-row' }, [sampleSel, el('button', { class: 'cg-btn', text: '読む', onclick: () => {
+                editor.stage = JSON.parse(JSON.stringify(GIMMICK_SAMPLES[+sampleSel.value])); editor.selected = null; refreshEditor();
+            } })]));
             p.appendChild(el('div', { class: 'cg-row' }, [baseSel, el('button', { class: 'cg-btn', text: '読む', onclick: () => {
                 const src = stages[+baseSel.value];
                 const n = normalizeStage(Object.assign({ name: `STAGE${+baseSel.value + 1} EDIT` }, JSON.parse(JSON.stringify(src))));
@@ -2882,7 +2967,7 @@
             return [z.x + nx / n * (z.r + extra + 0.6), z.y + ny / n * (z.r + extra + 0.6)];
         }
         function setCarry(list, on) {
-            list.forEach(b => { b.body.mass = on ? 0 : 1; b.body.updateMassProperties(); b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
+            list.forEach(b => { b.body.mass = on ? 0 : (b.baseMass || 1); b.body.updateMassProperties(); b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
         }
         // 運んでいるブロック群を (tx,ty) へ向けて今フレームぶん動かす。着いたら true
         function carryToward(lead, list, tx, ty, dt) {
@@ -2930,6 +3015,239 @@
                 if (arrived) setCarry(main, false);
             }
         });
+
+
+        // ---------------------------------------------------------------------
+        // 新ギミック（Phase 4 の続き）：重量ブロック・磁力ブロック・ワープゲート・重力フィールド
+        // どれも「触れても墜落しない」パズル要素。本編9ステージには入れず、エディターと見本ステージで使う。
+        // 手で持っている（質量0の）ブロックには力もワープも掛けない（指から勝手に離れないように）
+        // ---------------------------------------------------------------------
+        const HEAVY_MASS = 4;         // 重量ブロックの重さ（ふつうは1）
+        const HEAVY_SCALE = 1.18;     // 見た目を少し大きくして重さを伝える
+        const MAGNET_RANGE = 6;       // 磁力が届く距離
+        // 磁力の強さ（距離の2乗に反比例）。6 だと距離4で0.6秒に0.05しか動かず「効いているのか分からない」ので30にした
+        const MAGNET_K = 30;
+        const MAGNET_MAX = 6;         // 近すぎて暴れないための上限
+        const WARP_COOLDOWN_MS = 1200;// ワープ直後に連続で飛ばないための待ち時間
+        function mixColor(a, b, t) {
+            const ca = new THREE.Color(a), cb = new THREE.Color(b);
+            return ca.lerp(cb, t).getHex();
+        }
+        // ブロックの見た目の色：磁石は N=赤 / S=青、重いブロックは元の色を灰色寄りにする
+        function gimmickBlockColor(b) {
+            if (b.magnet === 'N') return 0xff3344;
+            if (b.magnet === 'S') return 0x3377ff;
+            if (b.heavy) return mixColor(b.color, 0x666666, 0.55);
+            return b.color;
+        }
+        // 磁石の N / S の文字（全ブロックで共有するので、片付けのときに捨てない）
+        const magnetLabelMats = {};
+        function magnetLabel(pole) {
+            if (!magnetLabelMats[pole]) {
+                const c = document.createElement('canvas'); c.width = c.height = 64;
+                const g = c.getContext('2d');
+                g.fillStyle = '#ffffff'; g.font = 'bold 48px monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+                g.fillText(pole, 32, 34);
+                magnetLabelMats[pole] = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true });
+            }
+            const s = new THREE.Sprite(magnetLabelMats[pole]);
+            s.scale.set(0.7, 0.7, 1);
+            s.userData.shared = true;
+            s.userData.magnetLabel = true;
+            return s;
+        }
+        function applyBlockLook(b) {
+            const col = gimmickBlockColor({ color: b.baseColor, heavy: b.heavy, magnet: b.magnet });
+            b.mesh.material.color.setHex(col);
+            b.mesh.material.emissive.setHex(col);
+            b.mesh.children.filter(c => c.userData.magnetLabel).forEach(c => b.mesh.remove(c));
+            if (b.magnet) b.mesh.add(magnetLabel(b.magnet));
+            if (b.heavy) {
+                b.mesh.scale.setScalar(HEAVY_SCALE);
+                const edge = b.mesh.children.find(c => c.isLineSegments);
+                if (edge) edge.material.color.setHex(0xffaa33); // 重いブロックは枠をオレンジに
+            }
+        }
+        // ワープ出口の目印と、入口→出口の点線（エディターのプレビューとゲーム中の両方で使う）
+        function makeWarpExit(o) {
+            const g = new THREE.Group();
+            const ring = circleLine(o.radius, 0xcc99ff, 0.9);
+            ring.position.set(o.exit[0], o.exit[1], 0);
+            const ring2 = circleLine(o.radius * 0.55, 0xcc99ff, 0.6);
+            ring2.position.set(o.exit[0], o.exit[1], 0);
+            const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(o.pos[0], o.pos[1], -0.1), new THREE.Vector3(o.exit[0], o.exit[1], -0.1)]), new THREE.LineDashedMaterial({ color: 0x9955ff, dashSize: 0.4, gapSize: 0.3, transparent: true, opacity: 0.6 }));
+            line.computeLineDistances();
+            g.add(ring, ring2, line);
+            return g;
+        }
+        // 重力フィールドの向きを示す矢印
+        function makeFieldArrow(o) {
+            const a = THREE.MathUtils.degToRad(o.angle);
+            const dir = new THREE.Vector3(Math.cos(a), Math.sin(a), 0);
+            const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(-dir.x * o.range * 0.5, -dir.y * o.range * 0.5, 0), o.range, 0x44dd88, 0.6, 0.4);
+            return arrow;
+        }
+        // ゲーム中の見た目（ワープ出口・重力の矢印など）。盤面を片付けるときに一緒に捨てる
+        let gimmickVisuals = null;
+        function clearGimmickVisuals() {
+            if (!gimmickVisuals) return;
+            scene.remove(gimmickVisuals);
+            gimmickVisuals.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && !o.userData.shared) o.material.dispose(); });
+            gimmickVisuals = null;
+        }
+        boardCleanupHooks.push(clearGimmickVisuals);
+        onGameEvent((type, d) => {
+            if (type !== 'stageLoaded') return;
+            const sd = d.stageData || {};
+            blocks.forEach((b, i) => {
+                const src = (sd.blocks || [])[i] || {};
+                b.baseColor = src.color;
+                b.heavy = !!src.heavy;
+                b.magnet = src.magnet || null;
+                b.baseMass = b.heavy ? HEAVY_MASS : 1;
+                if (b.heavy) { b.body.mass = HEAVY_MASS; b.body.updateMassProperties(); }
+                if (b.heavy || b.magnet) applyBlockLook(b);
+            });
+            clearGimmickVisuals();
+            const extra = (sd.obstacles || []).filter(o => o.type === 'warp' || o.type === 'gravfield');
+            if (extra.length) {
+                gimmickVisuals = new THREE.Group();
+                extra.forEach(o => {
+                    if (o.type === 'warp') gimmickVisuals.add(makeWarpExit(o));
+                    if (o.type === 'gravfield') {
+                        const g = new THREE.Group();
+                        g.add(circleLine(o.range, 0x44dd88, 0.45), makeFieldArrow(o));
+                        g.position.set(o.pos[0], o.pos[1], 0);
+                        gimmickVisuals.add(g);
+                    }
+                });
+                scene.add(gimmickVisuals);
+            }
+        });
+
+        // --- 重量ブロック：持っている塊に重いブロックがあると、カーソルに遅れてついてくる ---
+        dragFollowFactor = group => {
+            const heavy = group.filter(b => b.heavy).length;
+            return heavy ? 1 / (1 + 1.2 * heavy) : 1;
+        };
+        frameHooks.push(dt => {
+            if (!dragging || !dragTarget || dt <= 0) return;
+            const group = [dragging].concat(dragGroup);
+            const follow = dragFollowFactor(group);
+            if (follow >= 1) return;
+            // 1秒あたり「残りの距離の何割を詰めるか」を重さで決める（フレームレートに依存しない指数的な追従）
+            const k = 1 - Math.exp(-dt * 14 * follow);
+            const dx = (dragTarget.x - dragging.body.position.x) * k, dy = (dragTarget.y - dragging.body.position.y) * k;
+            group.forEach(b => { b.body.position.x += dx; b.body.position.y += dy; b.body.velocity.set(0, 0, 0); });
+            attemptDock(dragging);
+        });
+
+        // --- 磁力ブロック：N と S は引き合い、同じ極どうしは反発する（同じ塊どうしは対象外） ---
+        physicsHooks.push(dt => {
+            if (!gameStarted || docked || bonusActive) return;
+            const mags = blocks.filter(b => b.magnet);
+            if (mags.length < 2) return;
+            for (let i = 0; i < mags.length; i++) for (let j = i + 1; j < mags.length; j++) {
+                const a = mags[i], c = mags[j];
+                if (a.links && a.links.has(c)) continue;
+                if (getConnectedGroup(a).includes(c)) continue;
+                const dx = c.body.position.x - a.body.position.x, dy = c.body.position.y - a.body.position.y;
+                const d = Math.hypot(dx, dy);
+                if (d > MAGNET_RANGE || d < 0.3) continue;
+                const sign = a.magnet === c.magnet ? -1 : 1; // 1=引き合う, -1=反発
+                // 範囲の外側2割でなだらかに0へ落とす（境界で急に切れないように）
+                const fade = d > MAGNET_RANGE * 0.8 ? (MAGNET_RANGE - d) / (MAGNET_RANGE * 0.2) : 1;
+                const acc = Math.min(MAGNET_K / (d * d), MAGNET_MAX) * sign * fade;
+                const ux = dx / d, uy = dy / d;
+                if (a.body.mass > 0) { a.body.velocity.x += ux * acc * dt / a.body.mass; a.body.velocity.y += uy * acc * dt / a.body.mass; }
+                if (c.body.mass > 0) { c.body.velocity.x -= ux * acc * dt / c.body.mass; c.body.velocity.y -= uy * acc * dt / c.body.mass; }
+            }
+        });
+        // 極の切り替え：磁石ブロックをダブルクリック（スマホはダブルタップ）
+        function toggleMagnetAt(x, y) {
+            if (!gameStarted || inputLocked) return false;
+            const b = pickNearestBlockOnScreen(x, y, 32);
+            if (!b || !b.magnet) return false;
+            b.magnet = b.magnet === 'N' ? 'S' : 'N';
+            applyBlockLook(b);
+            return true;
+        }
+        renderer.domElement.addEventListener('dblclick', e => toggleMagnetAt(e.clientX, e.clientY));
+        let lastTap = { t: 0, x: 0, y: 0 };
+        renderer.domElement.addEventListener('pointerdown', e => {
+            if (e.pointerType !== 'touch') return;
+            const now = Date.now();
+            if (now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) { toggleMagnetAt(e.clientX, e.clientY); lastTap.t = 0; return; }
+            lastTap = { t: now, x: e.clientX, y: e.clientY };
+        });
+
+        // --- ワープゲート：入口に入ったブロックを、つながっている塊ごと出口へ移す ---
+        // 塊の一部だけを移すと拘束（つながり）が引き伸ばされて暴れるので、必ず塊全体を同じだけ動かす
+        physicsHooks.push(() => {
+            if (!gameStarted || docked || bonusActive) return;
+            const warps = obstacles.filter(o => o.data.type === 'warp');
+            if (!warps.length) return;
+            const now = Date.now();
+            warps.forEach(w => {
+                const ex = w.data.exit, r = w.data.radius || 0.8;
+                for (const b of blocks) {
+                    if (b.body.mass === 0 || (b.warpUntil || 0) > now) continue;
+                    if (Math.hypot(b.body.position.x - w.mesh.position.x, b.body.position.y - w.mesh.position.y) > r) continue;
+                    const group = getConnectedGroup(b);
+                    if (group.some(g => g.body.mass === 0)) continue; // 塊のどこかを手で持っているあいだは飛ばさない
+                    const dx = ex[0] - b.body.position.x, dy = ex[1] - b.body.position.y;
+                    group.forEach(g => {
+                        g.body.position.x += dx; g.body.position.y += dy;
+                        g.prevPos.copy(g.body.position);
+                        if (w.data.keepVelocity === false) g.body.velocity.set(0, 0, 0);
+                        g.trail.length = 0; // 入口から出口まで軌跡の線が引かれないように
+                        g.trailPrev.set(g.body.position.x, g.body.position.y, g.body.position.z);
+                        g.warpUntil = now + WARP_COOLDOWN_MS;
+                    });
+                    playConnectionSound();
+                    break; // 1ステップで1つの塊だけ
+                }
+            });
+        });
+
+        // --- 重力フィールド：範囲の中のブロックを決まった向きへ流す ---
+        physicsHooks.push(dt => {
+            if (!gameStarted || docked || bonusActive) return;
+            const fields = obstacles.filter(o => o.data.type === 'gravfield');
+            if (!fields.length) return;
+            fields.forEach(f => {
+                const a = THREE.MathUtils.degToRad(f.data.angle || 0), ux = Math.cos(a), uy = Math.sin(a);
+                blocks.forEach(b => {
+                    if (b.body.mass === 0) return;
+                    if (Math.hypot(b.body.position.x - f.mesh.position.x, b.body.position.y - f.mesh.position.y) > f.data.range) return;
+                    b.body.velocity.x += ux * f.data.strength * dt;
+                    b.body.velocity.y += uy * f.data.strength * dt;
+                });
+            });
+        });
+
+        // --- 見本ステージ（エディターの「見本」から読める。そこからテストプレイもできる） ---
+        const GIMMICK_SAMPLES = [
+            { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: '重いブロック', blocks: [
+                { pos: [-8, 5, 0], color: 0xff0000 }, { pos: [8, 5, 0], color: 0x00ff00 }, { pos: [-8, -5, 0], color: 0x0000ff, heavy: true },
+                { pos: [8, -5, 0], color: 0xffff00 }, { pos: [0, 8, 0], color: 0xff00ff, heavy: true }, { pos: [0, -8, 0], color: 0x00ffff }],
+              obstacles: [{ type: 'mars', pos: [4.5, 0, 0], radius: 1.1 }] },
+            { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: '磁石ブロック', blocks: [
+                { pos: [-8, 6, 0], color: 0xff0000, magnet: 'N' }, { pos: [8, 6, 0], color: 0x00ff00, magnet: 'N' },
+                { pos: [-8, -6, 0], color: 0x0000ff, magnet: 'S' }, { pos: [8, -6, 0], color: 0xffff00, magnet: 'S' },
+                { pos: [0, 8.5, 0], color: 0xff00ff }, { pos: [0, -8.5, 0], color: 0x00ffff }],
+              obstacles: [] },
+            { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: 'ワープゲート', blocks: [
+                { pos: [-9, 6, 0], color: 0xff0000 }, { pos: [-9, -6, 0], color: 0x00ff00 }, { pos: [9, 6, 0], color: 0x0000ff },
+                { pos: [9, -6, 0], color: 0xffff00 }, { pos: [0, 8.5, 0], color: 0xff00ff }],
+              obstacles: [{ type: 'mars', pos: [-4, 0, 0], radius: 1.2 }, { type: 'mars', pos: [4, 0, 0], radius: 1.2 },
+                { type: 'warp', pos: [-8, 0, 0], radius: 0.8, exit: [0, -4, 0], keepVelocity: false }] },
+            { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: '重力フィールド', blocks: [
+                { pos: [-8, 6, 0], color: 0xff0000 }, { pos: [8, 6, 0], color: 0x00ff00 }, { pos: [-8, -6, 0], color: 0x0000ff },
+                { pos: [8, -6, 0], color: 0xffff00 }, { pos: [0, -8.5, 0], color: 0x00ffff }],
+              obstacles: [{ type: 'gravfield', pos: [0, 6, 0], radius: 0.5, range: 3, strength: 2.5, angle: 270 },
+                { type: 'gravfield', pos: [6, -2, 0], radius: 0.5, range: 2.5, strength: 2.5, angle: 0 }] }
+        ];
 
     </script>
     <!-- FEATURES V2 END -->
