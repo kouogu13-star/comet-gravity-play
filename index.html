@@ -459,6 +459,7 @@
                 blocks.forEach(b => { b.prevPos.copy(b.body.position); b.prevQuat.copy(b.body.quaternion); });
                 applyJupiterGravity(); // 引力も物理と同じ刻みで掛ける（以前は描画1回ごと＝これもリフレッシュレート依存だった）
                 physicsHooks.forEach(fn => fn(FIXED_DT));
+                keepInsideBoard();
                 world.step(FIXED_DT);
                 physicsAccumulator -= FIXED_DT;
                 steps++;
@@ -496,7 +497,22 @@
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         // 盤面（横±11.5・縦±10）が画面に収まるカメラ距離。横長のPC画面では従来どおり15のまま。
         // スマホの縦画面は横幅が狭く、15のままだと左右のブロックが画面外に出てつかめなかったので、その分だけ引く
-        const VIEW_HALF_W = 11.5, VIEW_HALF_H = 10, BASE_CAMERA_Z = 15;
+        const VIEW_HALF_W = 12.5, VIEW_HALF_H = 11.2, BASE_CAMERA_Z = 15;
+        // 盤面の端。ここより外に出たブロックは内側へ押し戻す（見えない壁）。
+        // 以前は投げたり磁石で押されたりしたブロックが画面外へ飛び、二度と戻らずクリア不能になることがあった。
+        // 本編のブロックは最大でも x=±11・y=±10.5 に置かれているので、遊び方は変わらない
+        const BOARD_HALF_W = 12.5, BOARD_HALF_H = 11.2;
+        function keepInsideBoard() {
+            blocks.forEach(b => {
+                if (b.body.mass === 0) return; // 手で持っているブロックは対象外
+                const p = b.body.position, v = b.body.velocity;
+                if (p.x > BOARD_HALF_W) { p.x = BOARD_HALF_W; if (v.x > 0) v.x = -v.x * 0.3; }
+                if (p.x < -BOARD_HALF_W) { p.x = -BOARD_HALF_W; if (v.x < 0) v.x = -v.x * 0.3; }
+                if (p.y > BOARD_HALF_H && !bonusActive) { p.y = BOARD_HALF_H; if (v.y > 0) v.y = -v.y * 0.3; } // ボーナスは上から降ってくるので上の壁は無し
+                if (p.y < -BOARD_HALF_H) { p.y = -BOARD_HALF_H; if (v.y < 0) v.y = -v.y * 0.3; }
+                if (Math.abs(p.z) > 3) { p.z = Math.sign(p.z) * 3; v.z = 0; }
+            });
+        }
         function fitCameraDistance() {
             const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
             return Math.max(BASE_CAMERA_Z, VIEW_HALF_H / t, VIEW_HALF_W / (t * camera.aspect));
@@ -940,6 +956,11 @@
                     b.body.updateMassProperties();
                 });
                 attemptDock(dragging);
+                // 投げる勢いは「離す直前0.1秒の動き」だけで決める。
+                // 以前は最後の5回の移動を時刻に関係なく使っていたため、速く動かしたあと止めてから離すと、
+                // 止める前の勢いで飛んでいった（重いブロックは追いつくのを待ってから離すので毎回これを踏み、塊が画面外へ飛んだ）
+                const nowT = Date.now();
+                mouseHistory = mouseHistory.filter(p => nowT - p.t <= 100);
                 if (mouseHistory.length >= 2) {
                     const first = mouseHistory[0];
                     const last = mouseHistory[mouseHistory.length - 1];
@@ -3029,6 +3050,12 @@
         const MAGNET_K = 30;
         const MAGNET_MAX = 6;         // 近すぎて暴れないための上限
         const WARP_COOLDOWN_MS = 1200;// ワープ直後に連続で飛ばないための待ち時間
+        // 磁力で出る速さの上限。上限が無いと、同じ極が近くにあり続ける間ずっと加速して塊ごと画面外へ飛んでいった（遊んで確認した）
+        const MAGNET_SPEED_CAP = 3.5;
+        function capSpeed(b) {
+            const v = b.body.velocity, s = Math.hypot(v.x, v.y);
+            if (s > MAGNET_SPEED_CAP) { v.x *= MAGNET_SPEED_CAP / s; v.y *= MAGNET_SPEED_CAP / s; }
+        }
         function mixColor(a, b, t) {
             const ca = new THREE.Color(a), cb = new THREE.Color(b);
             return ca.lerp(cb, t).getHex();
@@ -3159,8 +3186,8 @@
                 const fade = d > MAGNET_RANGE * 0.8 ? (MAGNET_RANGE - d) / (MAGNET_RANGE * 0.2) : 1;
                 const acc = Math.min(MAGNET_K / (d * d), MAGNET_MAX) * sign * fade;
                 const ux = dx / d, uy = dy / d;
-                if (a.body.mass > 0) { a.body.velocity.x += ux * acc * dt / a.body.mass; a.body.velocity.y += uy * acc * dt / a.body.mass; }
-                if (c.body.mass > 0) { c.body.velocity.x -= ux * acc * dt / c.body.mass; c.body.velocity.y -= uy * acc * dt / c.body.mass; }
+                if (a.body.mass > 0) { a.body.velocity.x += ux * acc * dt / a.body.mass; a.body.velocity.y += uy * acc * dt / a.body.mass; capSpeed(a); }
+                if (c.body.mass > 0) { c.body.velocity.x -= ux * acc * dt / c.body.mass; c.body.velocity.y -= uy * acc * dt / c.body.mass; capSpeed(c); }
             }
         });
         // 極の切り替え：磁石ブロックをダブルクリック（スマホはダブルタップ）
