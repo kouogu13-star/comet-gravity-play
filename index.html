@@ -18,6 +18,10 @@
         canvas {
             display: block;
             touch-action: none;
+            /* iPhone で長押ししたときの選択・拡大鏡・メニューを出さない（ドラッグの邪魔になる） */
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
         }
 
         /* メニュー画面は縦にスクロールできるようにする */
@@ -201,6 +205,8 @@
             #best-time-display { top: 64px !important; }
             #bonus-hud { top: 46px !important; }
             #dock-message { font-size: 28px !important; }
+            /* CPUバーは右端に小さく半透明で置く（幅の狭い iPhone SE などでブロックに重なって見えにくかった） */
+            #cpu-ghost { right: 4px !important; transform: translateY(-50%) scale(0.7) !important; transform-origin: right center; opacity: 0.75; }
         }
     </style>
 </head>
@@ -988,11 +994,19 @@
         }
         let particles = [];
         const connectionLines = [];
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // 音が出せない環境でもゲームは止めない。以前はここで例外が出ると、これより後ろのスクリプト（ステージ定義や
+        // START ボタンの登録）が全部実行されず、START すら押せなくなっていた（WebKit で再現）
+        let audioContext = null;
+        try { audioContext = new (window.AudioContext || window.webkitAudioContext)(); }
+        catch (e) { console.warn('[sound] Web Audio が使えないので無音で動かす', e); }
+        // iPhone の Safari などは、画面に触れるまで音を止めておく決まりがある。最初の操作で音を有効にする
+        ['pointerdown', 'touchend', 'click', 'keydown'].forEach(ev => window.addEventListener(ev, () => {
+            if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+        }, { capture: true, passive: true }));
         // ミュート。音を作る関数の入口で見る共通フラグ（セッション内のみ保持、永続化しない仕様）
         let muted = false;
         function playConnectionSound() {
-            if (muted) return;
+            if (muted || !audioContext) return;
             const osc = audioContext.createOscillator();
             const gain = audioContext.createGain();
             osc.connect(gain);
@@ -1006,7 +1020,7 @@
             osc.stop(audioContext.currentTime + 0.15);
         }
         function playDockingSound() {
-            if (muted) return;
+            if (muted || !audioContext) return;
             const times = [0, 0.1, 0.2, 0.3, 0.4];
             const frequencies = [100, 150, 200, 300, 500];
             times.forEach((time, i) => {
@@ -1334,7 +1348,7 @@
             }, 1800);
         }
         function playDeathSound() {
-            if (muted) return;
+            if (muted || !audioContext) return;
             const osc = audioContext.createOscillator();
             const gain = audioContext.createGain();
             osc.connect(gain);
@@ -1353,7 +1367,7 @@
             const melody = [523.25, 659.25, 783.99, 1046.50, 783.99, 659.25, 880.00, 1046.50]; // C5-E5-G5-C6-G5-E5-A5-C6
             let step = 0;
             function playNote() {
-                if (muted) return; // 曲の途中でミュートしても次の音から止まる（intervalは回したままにして、解除で復帰）
+                if (muted || !audioContext) return; // 曲の途中でミュートしても次の音から止まる（intervalは回したままにして、解除で復帰）
                 const freq = melody[step % melody.length];
                 const osc = audioContext.createOscillator();
                 const gain = audioContext.createGain();
