@@ -1,0 +1,2803 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Comet Gravity</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%);
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* --- 初見プレイヤー向けの導線（タイトル説明文・選択肢の一言解説・操作説明画面） --- */
+        /* ボタンとその解説文を1組にまとめる。ボタン自体のインラインstyleには手を触れずに済ませる */
+        .menu-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 22px;
+        }
+
+        .menu-item:last-child {
+            margin-bottom: 0;
+        }
+
+        /* ボタン側の margin-bottom は .menu-item が持つので打ち消す */
+        .menu-item>button {
+            margin-bottom: 0 !important;
+        }
+
+        .menu-desc {
+            margin: 10px 0 0;
+            /* 1行が途中で折り返して数字が分断されないだけの幅を確保する */
+            max-width: 640px;
+            color: #8fa3b0;
+            font-size: 13px;
+            line-height: 1.7;
+            letter-spacing: 1px;
+            text-align: center;
+        }
+
+        /* 「死んだら全部やり直し」など、知らないと驚く注意書き */
+        .menu-warn {
+            color: #ff6644;
+            text-shadow: 0 0 8px rgba(255, 68, 0, 0.5);
+        }
+
+        .title-lead {
+            max-width: 620px;
+            margin: 0 0 44px;
+            color: #9fd6c4;
+            font-size: 16px;
+            line-height: 2;
+            letter-spacing: 2px;
+            text-align: center;
+        }
+
+        .title-lead .accent {
+            color: #00ffaa;
+            text-shadow: 0 0 12px #00ffaa;
+        }
+
+        /* 操作説明画面：操作を1行1項目で並べる */
+        .control-list {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            margin-bottom: 46px;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 22px;
+        }
+
+        .control-key {
+            flex: none;
+            /* 一番長い「ホイール／空中でドラッグ」が1行に収まる幅。折り返すと3項目の高さが揃わなくなる */
+            width: 236px;
+            padding: 10px 0;
+            border: 1px solid #00ffaa;
+            border-radius: 3px;
+            color: #00ffaa;
+            font-size: 14px;
+            letter-spacing: 2px;
+            text-align: center;
+            box-shadow: 0 0 12px rgba(0, 255, 170, 0.25) inset;
+        }
+
+        .control-text {
+            color: #cfe6dd;
+            font-size: 15px;
+            line-height: 1.7;
+            letter-spacing: 1px;
+        }
+
+        .control-text small {
+            display: block;
+            margin-top: 3px;
+            color: #7e93a0;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+
+        .goal-note {
+            max-width: 640px;
+            margin: 0 0 40px;
+            padding: 14px 22px;
+            border-left: 2px solid #ffaa00;
+            color: #d8c9a8;
+            font-size: 13px;
+            line-height: 1.9;
+            letter-spacing: 1px;
+        }
+
+        .goal-note b {
+            color: #ffcc55;
+        }
+
+        /* 解説文が増えて画面より高くなることがある。インラインの justify-content:center のままだと
+           あふれた分が上端で切れてスクロールしても読めないので、auto マージンで中央寄せし直す */
+        #mode-screen,
+        #difficulty-screen,
+        #controls-screen {
+            justify-content: flex-start !important;
+            overflow-y: auto;
+            padding: 32px 20px;
+            box-sizing: border-box;
+        }
+
+        #mode-screen>*:first-child,
+        #difficulty-screen>*:first-child,
+        #controls-screen>*:first-child {
+            margin-top: auto;
+        }
+
+        #mode-screen>*:last-child,
+        #difficulty-screen>*:last-child,
+        #controls-screen>*:last-child {
+            margin-bottom: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="dock-message"
+        style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-family: monospace; font-size: 48px; color: #00ffaa; text-shadow: 0 0 20px #00ffaa, 0 0 40px #00ffaa; opacity: 0; pointer-events: none; transition: opacity 0.5s; z-index: 100; white-space: nowrap;">
+        DOCKING SUCCESS</div>
+    <div id="title-screen"
+        style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 200; font-family: monospace;">
+        <h1
+            style="font-size: 72px; color: #00ffaa; text-shadow: 0 0 30px #00ffaa; margin-bottom: 40px; letter-spacing: 8px; text-align: center;">
+            COMET GRAVITY</h1>
+        <p class="title-lead">
+            宇宙に散らばったブロックを<span class="accent">ドラッグでくっつけて</span>、ひとつの塊にする。<br>
+            まとめた塊を中央の<span class="accent">アンカーまで運べばステージクリア</span>。<br>
+            全９ステージ。惑星に触れないように。
+        </p>
+        <button id="start-button"
+            style="font-size: 24px; padding: 20px 60px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 4px; transition: all 0.3s;"
+            onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+            onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">START</button>
+        <p style="position: absolute; bottom: 40px; color: #666; font-size: 14px;">LEFT CLICK: Drag & Dock • RIGHT CLICK:
+            Rotate • WHEEL: Zoom</p>
+    </div>
+    <div id="mode-screen"
+        style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 200; font-family: monospace;">
+        <h2 style="font-size: 36px; color: #00ffaa; text-shadow: 0 0 20px #00ffaa; margin-bottom: 50px; letter-spacing: 6px;">MODE SELECT</h2>
+        <div class="menu-item">
+            <button id="mode-idle-button"
+                style="font-size: 22px; padding: 18px 60px; margin-bottom: 24px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 340px;"
+                onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">チュートリアルモード</button>
+            <p class="menu-desc">まずはお試しで遊びたい人へ。<br>時間制限もペナルティもなし。惑星も飾りだけ。好きなだけ触って操作に慣れられる。</p>
+        </div>
+        <div class="menu-item">
+            <button id="mode-timeattack-button"
+                style="font-size: 22px; padding: 18px 60px; background: transparent; color: #ffaa00; border: 2px solid #ffaa00; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 340px;"
+                onmouseover="this.style.background='#ffaa00'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#ffaa00';">タイムアタックモード</button>
+            <p class="menu-desc">ガチでやりたい人へ。<br>1ステージ60秒＋障害物あり。CPUゴーストとスコアで勝負する。</p>
+        </div>
+        <div class="menu-item">
+            <button id="mode-editor-button" class="sub-menu-button">ステージエディター</button>
+            <p class="menu-desc">自分でステージを作って遊ぶ。JSONで保存・共有もできる。</p>
+        </div>
+        <div class="menu-item">
+            <button id="mode-records-button" class="sub-menu-button">記録・実績・リプレイ</button>
+            <p class="menu-desc">ベストタイム、実績、保存したリプレイを見る。</p>
+        </div>
+        <div class="menu-item">
+            <button id="mode-demo-button" class="sub-menu-button">AUTO DEMO</button>
+            <p class="menu-desc">CPUが自分でブロックを集めてステージを解く様子を見る。</p>
+        </div>
+    </div>
+    <div id="difficulty-screen"
+        style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 200; font-family: monospace;">
+        <h2 style="font-size: 36px; color: #ffaa00; text-shadow: 0 0 20px #ffaa00; margin-bottom: 40px; letter-spacing: 6px;">DIFFICULTY</h2>
+        <div class="menu-item">
+            <button data-difficulty="easy" class="difficulty-button"
+                style="font-size: 20px; padding: 14px 50px; margin-bottom: 16px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 300px;"
+                onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">弱い</button>
+            <p class="menu-desc">はじめての人はここから。惑星に触れても1.5秒は耐えられる。CPUは55秒でクリア。</p>
+        </div>
+        <div class="menu-item">
+            <button data-difficulty="normal" class="difficulty-button"
+                style="font-size: 20px; padding: 14px 50px; margin-bottom: 16px; background: transparent; color: #88ff00; border: 2px solid #88ff00; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 300px;"
+                onmouseover="this.style.background='#88ff00'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#88ff00';">普通</button>
+            <p class="menu-desc">標準。触れてから1.0秒で墜落。CPUは45秒でクリア。</p>
+        </div>
+        <div class="menu-item">
+            <button data-difficulty="hard" class="difficulty-button"
+                style="font-size: 20px; padding: 14px 50px; margin-bottom: 16px; background: transparent; color: #ffaa00; border: 2px solid #ffaa00; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 300px;"
+                onmouseover="this.style.background='#ffaa00'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#ffaa00';">強い</button>
+            <p class="menu-desc">慣れてきた人向け。触れてから0.8秒で墜落。CPUは35秒でクリア。</p>
+        </div>
+        <div class="menu-item">
+            <button data-difficulty="veryhard" class="difficulty-button"
+                style="font-size: 20px; padding: 14px 50px; margin-bottom: 16px; background: transparent; color: #ff5500; border: 2px solid #ff5500; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 300px;"
+                onmouseover="this.style.background='#ff5500'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#ff5500';">超強い</button>
+            <p class="menu-desc">触れてから0.6秒で墜落。CPUは25秒でクリア。<br>
+                <span class="menu-warn">※ 1回でも墜落すると、ステージ1からやり直し。スコアも0に戻ります。</span>
+            </p>
+        </div>
+        <div class="menu-item">
+            <button data-difficulty="master" class="difficulty-button"
+                style="font-size: 20px; padding: 14px 50px; background: transparent; color: #ff0044; border: 2px solid #ff0044; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 300px;"
+                onmouseover="this.style.background='#ff0044'; this.style.color='#000';"
+                onmouseout="this.style.background='transparent'; this.style.color='#ff0044';">マスター</button>
+            <p class="menu-desc">最高難度。触れてから0.4秒で墜落。CPUは15秒でクリア。<br>
+                <span class="menu-warn">※ 1回でも墜落すると、ステージ1からやり直し。スコアも0に戻ります。</span>
+            </p>
+        </div>
+    </div>
+    <div id="controls-screen"
+        style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 200; font-family: monospace;">
+        <h2 style="font-size: 36px; color: #00ffaa; text-shadow: 0 0 20px #00ffaa; margin-bottom: 40px; letter-spacing: 6px;">
+            HOW TO PLAY</h2>
+        <div class="control-list">
+            <div class="control-row">
+                <div class="control-key">左クリック＋ドラッグ</div>
+                <div class="control-text">ブロックをつかんで動かす<small>近づけると自動でくっつく。くっついた塊はまとめて動かせる</small></div>
+            </div>
+            <div class="control-row">
+                <div class="control-key">右クリック＋ドラッグ</div>
+                <div class="control-text">ブロックを回転させる<small>向きを変えて、くっつける面を合わせる</small></div>
+            </div>
+            <div class="control-row">
+                <div class="control-key">マウスホイール</div>
+                <div class="control-text">カメラの拡大・縮小<small>視点は真正面に固定（何もない所をドラッグしても画面は回らない）</small></div>
+            </div>
+        </div>
+        <p class="goal-note">
+            <b>クリア条件</b>　全部のブロックをひとつにつなげて、中央で光っている<b>アンカー</b>まで運ぶ。<br>
+            <b>気をつけること</b>　オレンジや赤の惑星に触れ続けると墜落する。触れてもすぐ離れれば助かる。
+        </p>
+        <button id="controls-start-button"
+            style="font-size: 24px; padding: 18px 60px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 4px; transition: all 0.3s;"
+            onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+            onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">START</button>
+    </div>
+    <div id="danger-warning"
+        style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255, 0, 0, 0.15); display: flex; justify-content: center; align-items: flex-start; padding-top: 15vh; box-sizing: border-box; opacity: 0; pointer-events: none; transition: opacity 0.15s; z-index: 90; font-family: monospace;">
+        <span style="font-size: 40px; color: #ff2200; text-shadow: 0 0 20px #ff2200; letter-spacing: 6px;">WARNING!</span>
+    </div>
+    <div id="cpu-ghost"
+        style="position: fixed; right: 20px; top: 50%; transform: translateY(-50%); display: none; z-index: 50; font-family: monospace; text-align: center;">
+        <div id="cpu-clear-flash"
+            style="color: #ff0044; font-size: 12px; letter-spacing: 1px; text-shadow: 0 0 10px #ff0044; opacity: 0; transition: opacity 0.4s; margin-bottom: 4px; white-space: nowrap;">
+            CPU CLEAR!</div>
+        <div style="color: #ff00ff; font-size: 12px; letter-spacing: 1px; margin-bottom: 6px;">CPU<br><span id="cpu-difficulty-label"></span></div>
+        <div style="width: 14px; height: 200px; border: 1px solid #ff00ff; margin: 0 auto; position: relative;">
+            <div id="cpu-progress-bar" style="position: absolute; bottom: 0; left: 0; width: 100%; height: 0%; background: #ff00ff; box-shadow: 0 0 10px #ff00ff; transition: background 0.3s, box-shadow 0.3s;"></div>
+        </div>
+        <div style="color: #ff00ff; font-size: 12px; margin-top: 6px;">SCORE<br><span id="cpu-score-value">0</span></div>
+    </div>
+    <div id="cpu-vs-result"
+        style="position: fixed; top: 62%; left: 50%; transform: translate(-50%, 0); font-family: monospace; font-size: 18px; letter-spacing: 2px; opacity: 0; transition: opacity 0.4s; pointer-events: none; z-index: 101; white-space: nowrap; text-shadow: 0 0 10px currentColor;">
+    </div>
+    <button id="reset-button"
+        style="position: fixed; top: 20px; right: 20px; font-size: 16px; padding: 12px 30px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 2px; transition: all 0.3s; z-index: 50; display: none;"
+        onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+        onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">RESET</button>
+    <button id="title-button"
+        style="position: fixed; top: 20px; right: 150px; font-size: 16px; padding: 12px 30px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 2px; transition: all 0.3s; z-index: 50; display: none;"
+        onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+        onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">TITLE</button>
+    <button id="sound-button"
+        style="position: fixed; top: 20px; right: 285px; font-size: 16px; padding: 12px 22px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 2px; transition: all 0.3s; z-index: 50; display: none;">SOUND: ON</button>
+    <button id="next-stage-button"
+        style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, 100px); font-size: 20px; padding: 16px 50px; background: transparent; color: #00ffaa; border: 2px solid #00ffaa; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; z-index: 110; display: none;"
+        onmouseover="this.style.background='#00ffaa'; this.style.color='#000';"
+        onmouseout="this.style.background='transparent'; this.style.color='#00ffaa';">NEXT STAGE</button>
+    <button id="retry-button"
+        style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, 100px); font-size: 20px; padding: 16px 50px; background: transparent; color: #ff2200; border: 2px solid #ff2200; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; z-index: 110; display: none;"
+        onmouseover="this.style.background='#ff2200'; this.style.color='#000';"
+        onmouseout="this.style.background='transparent'; this.style.color='#ff2200';">RETRY</button>
+    <div id="stage-number"
+        style="position: fixed; top: 20px; left: 20px; font-family: monospace; font-size: 14px; color: #00ffaa; letter-spacing: 2px; z-index: 50; display: none;">
+        STAGE <span id="stage-num">1</span></div>
+    <div id="score-display"
+        style="position: fixed; top: 60px; left: 20px; font-family: monospace; font-size: 14px; color: #00ffaa; letter-spacing: 2px; z-index: 50; display: none;">
+        SCORE: <span id="score-value">0</span></div>
+    <div id="timer-display"
+        style="position: fixed; top: 76px; right: 20px; font-family: monospace; font-size: 14px; color: #00ffaa; letter-spacing: 2px; z-index: 50; display: none;">
+        TIME: <span id="timer-value">60.0</span>s</div>
+    <div id="connection-status"
+        style="position: fixed; top: 100px; left: 20px; font-family: monospace; font-size: 13px; letter-spacing: 1px; z-index: 50; display: none; max-width: 300px; text-shadow: 0 0 8px currentColor;">
+    </div>
+    <div id="bonus-flash"
+        style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-family: monospace; font-size: 56px; color: #ffcc00; text-shadow: 0 0 30px #ffcc00, 0 0 60px #ff8800; opacity: 0; pointer-events: none; transition: opacity 0.6s; z-index: 160; letter-spacing: 6px; white-space: nowrap;">
+        BONUS STAGE!</div>
+    <div id="bonus-hud"
+        style="position: fixed; top: 20px; left: 20px; font-family: monospace; color: #ffcc00; letter-spacing: 2px; z-index: 55; display: none; text-shadow: 0 0 10px #ffcc00;">
+        <div style="font-size: 14px;">BONUS TIME: <span id="bonus-timer-value">30.0</span>s</div>
+        <div style="font-size: 14px;">CLUSTER: <span id="bonus-cluster-value">0</span> / <span id="bonus-total-value">0</span></div>
+        <div style="font-size: 12px; color: #ffaa55;">BEST: <span id="bonus-best-value">0</span></div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // --- ゲーム進行用のタイマー管理 ---
+        // 死亡→1.8秒後に再読み込み、時間切れ→1.2秒後にRETRY表示、のように「少し後に進行させる」処理が多い。
+        // これを素の setTimeout で予約すると、待っている間に TITLE で戻っても予約が生き残り、
+        // タイトル画面の裏でステージが勝手に始まったり、RETRY ボタンが幽霊のように出たりする。
+        // 進行に関わる予約は later() を通し、returnToTitle() でまとめて取り消す
+        const flowTimers = new Set();
+        function later(fn, ms) {
+            const id = setTimeout(() => { flowTimers.delete(id); fn(); }, ms);
+            flowTimers.add(id);
+            return id;
+        }
+        function cancelFlowTimers() {
+            flowTimers.forEach(id => clearTimeout(id));
+            flowTimers.clear();
+        }
+        // --- 追加機能（エディター・記録・リプレイ・デモ）との接続口 ---
+        // 本体は「何が起きたか」を emitGameEvent で知らせるだけにして、追加機能は下の別 <script> で onGameEvent から受け取る。
+        // 本体の進行ロジックに追加機能の都合を書き込まないための仕切り
+        const gameEventListeners = [];
+        function onGameEvent(fn) { gameEventListeners.push(fn); }
+        function emitGameEvent(type, data) {
+            gameEventListeners.forEach(fn => { try { fn(type, data || {}); } catch (e) { console.error('[gameEvent]', type, e); } });
+        }
+        const physicsHooks = []; // 物理1ステップごとに呼ぶ（力を加える系。引数は FIXED_DT）
+        const frameHooks = [];   // 描画1回ごとに呼ぶ（記録・表示系。引数は経過秒）
+        let inputLocked = false; // エディター・リプレイ中はゲームのドラッグ操作を止める
+        let customStageActive = false; // エディターで作ったステージをテストプレイ中か
+        let customStageData = null;
+        // --- 物理の時間管理（固定タイムステップ） ---
+        // 以前は描画1回ごとに world.step(1/60) を呼んでいたため、物理の速さが画面のリフレッシュレートに比例していた
+        // （144Hzのモニタでは物理・木星の引力が60Hzの2.4倍速 = 難易度が画面で変わる）。
+        // 実際に経過した時間を「貯金（アキュムレータ）」に積み、1/60秒たまるごとに1ステップ進める。
+        // 描画は前ステップと今ステップの間を補間して、144Hzでもカクつかせない
+        const FIXED_DT = 1 / 60;
+        const MAX_FRAME_DT = 0.1;   // 1フレームで受け付ける最大の経過時間。タブ復帰直後などに大量の遅れを一気に消化して暴走するのを防ぐ
+        const MAX_SUBSTEPS = 6;     // 1フレームで進める最大ステップ数（0.1秒ぶん）。これを超えた遅れは捨てる（処理落ちの悪循環を防ぐ）
+        let physicsAccumulator = 0;
+        let lastFrameTime = null;
+        let physicsAlpha = 1;       // 補間の割合（0=前ステップ, 1=最新ステップ）
+        function consumeFrameTime(now) {
+            if (typeof now !== 'number') return 0;
+            if (lastFrameTime === null) { lastFrameTime = now; return 0; }
+            const dt = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+            if (!(dt > 0)) return 0;
+            return Math.min(dt, MAX_FRAME_DT);
+        }
+        function stepPhysics(frameDt) {
+            physicsAccumulator += frameDt;
+            let steps = 0;
+            while (physicsAccumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+                blocks.forEach(b => { b.prevPos.copy(b.body.position); b.prevQuat.copy(b.body.quaternion); });
+                applyJupiterGravity(); // 引力も物理と同じ刻みで掛ける（以前は描画1回ごと＝これもリフレッシュレート依存だった）
+                physicsHooks.forEach(fn => fn(FIXED_DT));
+                world.step(FIXED_DT);
+                physicsAccumulator -= FIXED_DT;
+                steps++;
+            }
+            if (physicsAccumulator >= FIXED_DT) physicsAccumulator = 0;
+            physicsAlpha = physicsAccumulator / FIXED_DT;
+            return steps;
+        }
+        const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
+        // 見た目（mesh）を物理（body）に合わせる。手で動かしている最中のブロックは補間すると指に遅れるので、そのまま合わせる
+        function syncMeshFromBody(b) {
+            const p = b.body.position, q = b.body.quaternion;
+            if (b === dragging || b === rotating || dragGroup.includes(b)) {
+                b.mesh.position.set(p.x, p.y, p.z);
+                b.mesh.quaternion.set(q.x, q.y, q.z, q.w);
+                b.prevPos.copy(p); b.prevQuat.copy(q); // 離した瞬間に古い位置へ一瞬戻らないように
+                return;
+            }
+            const a = physicsAlpha, pp = b.prevPos;
+            b.mesh.position.set(pp.x + (p.x - pp.x) * a, pp.y + (p.y - pp.y) * a, pp.z + (p.z - pp.z) * a);
+            _qa.set(b.prevQuat.x, b.prevQuat.y, b.prevQuat.z, b.prevQuat.w);
+            _qb.set(q.x, q.y, q.z, q.w);
+            b.mesh.quaternion.copy(_qa).slerp(_qb, a);
+        }
+        const world = new CANNON.World();
+        world.gravity.set(0, 0, 0);
+        world.broadphase = new CANNON.NaiveBroadphase();
+        world.solver.iterations = 10;
+        const scene = new THREE.Scene();
+        const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0x8899ff, 0.8);
+        dirLight.position.set(10, 10, 10);
+        scene.add(dirLight);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 15;
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        let controls;
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.enablePan = false;
+            // ブロックは z=0 の平面上でしか動かないので、視点を回す意味がない。
+            // むしろブロックをつかみ損ねて何もない所をドラッグすると画面が回り、クリアの邪魔になっていたので回転は切る（拡大縮小だけ残す）
+            controls.enableRotate = false;
+            controls.minDistance = 5;
+            controls.maxDistance = 50;
+        }
+        const blocks = [];
+        function createBlock(x, y, z, color) {
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshPhongMaterial({ color: color, emissive: color, emissiveIntensity: 0.3, shininess: 80 });
+            const mesh = new THREE.Mesh(geometry, material);
+            // 生成時点で見た目の位置も合わせておく。原点のままにすると、最初のフレームで
+            // 原点→スポーン地点へ一気に動いたことになり、軌跡がその間に引かれてしまう
+            mesh.position.set(x, y, z);
+            scene.add(mesh);
+            const edges = new THREE.EdgesGeometry(geometry);
+            const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, linewidth: 2 });
+            const wireframe = new THREE.LineSegments(edges, lineMat);
+            mesh.add(wireframe);
+            const shape = new CANNON.Box(new CANNON.Vec3(0.5, 0.5, 0.5));
+            const body = new CANNON.Body({ mass: 1, position: new CANNON.Vec3(x, y, z), linearDamping: 0.05, angularDamping: 0.05 });
+            body.addShape(shape);
+            world.addBody(body);
+            // 軌跡の線はブロックごとに1本だけ作り、毎フレーム頂点の中身を書き換えて使い回す。
+            // 以前は毎フレーム線を作って setTimeout(16ms) で捨てていたが、これには2つ問題があった：
+            //   ・ブロック数ぶんの geometry/material/Line を毎フレーム生成するので、ボーナスの多ブロック時に重い
+            //   ・16msがrAF周期より長い高リフレッシュ表示(120/144Hz)では同じ線が2〜3本重なり、軌跡が明るく出る
+            const trailGeo = new THREE.BufferGeometry();
+            trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX_POINTS * 3), 3));
+            const trailMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.6, linewidth: 3 });
+            const trailLine = new THREE.Line(trailGeo, trailMat);
+            trailLine.visible = false;
+            // 頂点を毎フレーム書き換えるためバウンディングスフィアが当てにならない。視錐台カリングを切って消失を防ぐ
+            trailLine.frustumCulled = false;
+            scene.add(trailLine);
+            blocks.push({ mesh, body, trail: [], trailPrev: new THREE.Vector3(x, y, z), trailLine, prevPos: new CANNON.Vec3(x, y, z), prevQuat: new CANNON.Quaternion(), links: new Set() });
+        }
+        // Three.js のジオメトリ・マテリアルは scene から外しても GPU 側に残る。子要素（枠線・飾りリング）ごと解放する。
+        // 共有して使い回しているもの（userData.shared）は解放しない
+        function disposeObject3D(obj) {
+            obj.traverse(o => {
+                if (o.userData && o.userData.shared) return;
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+            });
+        }
+        // ブロック破棄時に軌跡の線も片付ける（使い回し方式なので明示的に捨てないと残る）
+        function disposeBlock(b) {
+            scene.remove(b.mesh);
+            disposeObject3D(b.mesh);
+            world.removeBody(b.body);
+            if (b.trailLine) {
+                scene.remove(b.trailLine);
+                b.trailLine.geometry.dispose();
+                b.trailLine.material.dispose();
+            }
+        }
+        // 盤面（ブロック・連結・障害物・パーティクル）を全部片付ける。
+        // 以前は loadStageData / clearBonusBlocks / returnToTitle に同じ処理がコピーされていて、
+        // 直すたびに1か所だけ漏れる（拘束の外し忘れ・リングの破棄漏れ）ことを繰り返していたので1つにまとめた
+        function clearBoard() {
+            blocks.forEach(disposeBlock);
+            blocks.length = 0;
+            connected.clear();
+            // DistanceConstraint は addConstraint で world 側にも登録されるが、removeBody では外れない。
+            // ここで外さないとステージをまたいで蓄積し、破棄済みボディへの拘束をソルバーが解き続けてしまう
+            world.constraints.slice().forEach(c => world.removeConstraint(c));
+            connectionLines.forEach(conn => scene.remove(conn.line)); // 連結線のジオメトリ・マテリアルは共有なので解放しない
+            connectionLines.length = 0;
+            obstacles.forEach(o => {
+                scene.remove(o.mesh); disposeObject3D(o.mesh);
+                if (o.rangeRing) { scene.remove(o.rangeRing); disposeObject3D(o.rangeRing); }
+            });
+            obstacles.length = 0;
+            particles.forEach(p => { scene.remove(p); p.material.dispose(); });
+            particles.length = 0;
+            physicsAccumulator = 0;
+        }
+        // 障害物（惑星）生成：mars = 静的な壁 / mercury = 周回する壁 / jupiter = 引力ゾーン（静的、近づくと引っ張られ、本体に触れるとmarsと同じ即死判定）
+        // data 例: { type: 'mars', pos: [x, y, z], radius: 1.2 }
+        //          { type: 'mercury', center: [x, y, z], orbitRadius: 5, speed: 0.8, phase: 0, radius: 0.8 }
+        //          { type: 'jupiter', pos: [x, y, z], radius: 1.6 }
+        function createObstacle(data) {
+            const radius = data.radius || 1.2;
+            const isOrbiting = data.type === 'mercury';
+            // repulsor = 反発フィールド（追加ギミック）。触れても死なず、範囲内のブロックを外向きに押し返す
+            const colorMap = { mars: 0xcc4422, mercury: 0x999988, jupiter: 0xddaa55, repulsor: 0x33bbff };
+            const color = colorMap[data.type] || 0xcc4422;
+            const geometry = new THREE.SphereGeometry(radius, 24, 24);
+            const material = new THREE.MeshPhongMaterial({ color: color, emissive: color, emissiveIntensity: 0.35, shininess: 20 });
+            const mesh = new THREE.Mesh(geometry, material);
+            const ringColor = data.type === 'jupiter' ? 0xffcc88 : data.type === 'repulsor' ? 0x66ddff : 0xff4422;
+            const ringGeo = new THREE.RingGeometry(radius * 1.2, radius * 1.35, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ color: ringColor, side: THREE.DoubleSide, transparent: true, opacity: 0.4 });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            mesh.add(ring);
+            let rangeRing = null;
+            if (data.type === 'jupiter' || data.type === 'repulsor') {
+                // 修正：引力の届く範囲を目安として薄く表示（二重リング）。反発フィールドも同じ仕組みで範囲を出す
+                // meshの子要素にすると animate() の o.mesh.rotation.y 回転がこのリングにもかかり、
+                // 真円→細い楕円→真円と見た目の広さが周期的に変わって目安として機能しなくなるため、
+                // scene直下に独立させて回転を受けないようにする（jupiterは静的配置なので位置同期は不要）
+                const range = data.type === 'repulsor' ? (data.range || 4) : (data.gravityRange || 6);
+                const rangeGeo = new THREE.RingGeometry(range * 0.98, range, 48);
+                const rangeMat = new THREE.MeshBasicMaterial({ color: data.type === 'repulsor' ? 0x66ddff : 0xffcc88, side: THREE.DoubleSide, transparent: true, opacity: data.type === 'repulsor' ? 0.2 : 0.08 });
+                rangeRing = new THREE.Mesh(rangeGeo, rangeMat);
+                rangeRing.position.set(data.pos[0], data.pos[1], data.pos[2]);
+                scene.add(rangeRing);
+            }
+            if (isOrbiting) {
+                const initPhase = data.phase || 0;
+                mesh.position.set(
+                    data.center[0] + Math.cos(initPhase) * data.orbitRadius,
+                    data.center[1] + Math.sin(initPhase) * data.orbitRadius,
+                    data.center[2]
+                );
+            } else {
+                mesh.position.set(data.pos[0], data.pos[1], data.pos[2]);
+            }
+            scene.add(mesh);
+            // rangeRing も障害物レコードに持たせる（scene直下なので loadStage 側で明示的に破棄しないと蓄積する）
+            obstacles.push({ mesh, data, radius, rangeRing });
+        }
+        const anchorGeo = new THREE.OctahedronGeometry(1.5, 0);
+        const anchorMat = new THREE.MeshBasicMaterial({ color: 0x00ffaa, wireframe: true });
+        const anchor = new THREE.Mesh(anchorGeo, anchorMat);
+        function createStarfield() {
+            const starGeo = new THREE.BufferGeometry();
+            const starCount = 1000;
+            const positions = new Float32Array(starCount * 3);
+            for (let i = 0; i < starCount * 3; i += 3) {
+                positions[i] = (Math.random() - 0.5) * 100;
+                positions[i + 1] = (Math.random() - 0.5) * 100;
+                positions[i + 2] = (Math.random() - 0.5) * 100;
+            }
+            starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.15, transparent: true, opacity: 0.8 });
+            const stars = new THREE.Points(starGeo, starMat);
+            scene.add(stars);
+            return stars;
+        }
+        const starfield = createStarfield();
+        scene.add(anchor);
+        const connected = new Set();
+        // 連結線は全部同じ見た目なので、長さ1のジオメトリとマテリアルを1つずつだけ作って全連結で共有する
+        const CONNECTION_GEO = new THREE.CylinderGeometry(0.15, 0.15, 1, 8);
+        const CONNECTION_MAT = new THREE.MeshBasicMaterial({ color: 0x00ffaa, transparent: true, opacity: 1.0 });
+        function createConnection(blockA, blockB) {
+            const i = blocks.indexOf(blockA);
+            const j = blocks.indexOf(blockB);
+            const key = [i, j].sort().join('-');
+            if (connected.has(key)) return;
+            connected.add(key);
+            // 隣接リスト。連結グループのBFSで「全連結ペアの文字列を毎回なめる」のをやめるために持つ
+            blockA.links.add(blockB);
+            blockB.links.add(blockA);
+            const constraint = new CANNON.DistanceConstraint(blockA.body, blockB.body, blockA.body.position.distanceTo(blockB.body.position), 100);
+            constraint.collideConnected = false;
+            world.addConstraint(constraint);
+            const direction = new THREE.Vector3().subVectors(blockB.mesh.position, blockA.mesh.position);
+            const distance = direction.length();
+            // 長さ1の共有ジオメトリを scale.y で伸ばす。以前は「作成時の距離」の長さで作ったうえに毎フレーム scale.y=距離 を
+            // 掛けていたため、見た目の長さが距離の2乗になっていた（距離1.4の線が約2.0で描かれる）
+            const line = new THREE.Mesh(CONNECTION_GEO, CONNECTION_MAT);
+            line.userData.shared = true;
+            line.scale.y = distance;
+            const midpoint = new THREE.Vector3().addVectors(blockA.mesh.position, blockB.mesh.position).multiplyScalar(0.5);
+            line.position.copy(midpoint);
+            line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+            scene.add(line);
+            connectionLines.push({ line, blockA, blockB });
+            playConnectionSound();
+        }
+        function checkCollisions() {
+            if (!gameStarted) return;
+            // 修正：全ペアに拘束を張ると4個以上で幾何学的に解けない過剰拘束（K4問題）が起きるため、
+            // 「まだ繋がっていないブロック」が「近くの1個」とだけ接続するようにする
+            // 高速化：以前はペアごとに getConnectedGroup（BFS）をやり直していて、ブロック数の3乗以上で重くなっていた
+            // （実測 40個で74ms・60個で382ms/フレーム。ボーナスステージが重い主因）。
+            // 連結成分の番号を1フレームに1回だけ振り、つないだら番号を付け替える。判定結果は以前と同じ
+            const n = blocks.length;
+            const comp = new Array(n).fill(-1);
+            const indexOf = new Map(blocks.map((b, i) => [b, i]));
+            let c = 0;
+            for (let i = 0; i < n; i++) {
+                if (comp[i] !== -1) continue;
+                getConnectedGroup(blocks[i]).forEach(b => { comp[indexOf.get(b)] = c; });
+                c++;
+            }
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    if (comp[i] === comp[j]) continue; // 既に同じ集団なら繋がない
+                    const blockA = blocks[i];
+                    const blockB = blocks[j];
+                    const distance = blockA.body.position.distanceTo(blockB.body.position);
+                    if (distance < 1.5) {
+                        createConnection(blockA, blockB);
+                        const from = comp[j], to = comp[i];
+                        for (let k = 0; k < n; k++) if (comp[k] === from) comp[k] = to;
+                    }
+                }
+            }
+        }
+        // 連結されているブロックを全て辿って集団（クラスター）を得る（BFS）
+        // ドラッグ中に他のブロックを引きずるのを防ぐため、ドラッグ対象と一緒に手動で移動させるのに使う
+        function getConnectedGroup(startBlock) {
+            if (!startBlock) return [];
+            const visited = new Set([startBlock]);
+            const queue = [startBlock];
+            for (let qi = 0; qi < queue.length; qi++) {
+                queue[qi].links.forEach(nb => { if (!visited.has(nb)) { visited.add(nb); queue.push(nb); } });
+            }
+            return queue;
+        }
+        // ボーナスステージ用：複数の独立した集団（クラスター）の中で一番大きいもののサイズを得る
+        function getLargestClusterSize() {
+            const visitedAll = new Set();
+            let maxSize = 0;
+            for (const b of blocks) {
+                if (visitedAll.has(b)) continue;
+                const group = getConnectedGroup(b);
+                group.forEach(g => visitedAll.add(g));
+                maxSize = Math.max(maxSize, group.length);
+            }
+            return maxSize;
+        }
+        const obstacles = [];
+        const OBSTACLE_HIT_MARGIN = 0.9; // ブロック半径ぶんの当たり判定マージン
+        const SPAWN_PROTECTION_SEC = 1.5; // ステージ入場直後、即死判定を止めておく秒数（操作する間もない事故死の防止）
+        // --- 軌跡（トレイル）のパラメータ ---
+        const TRAIL_MIN_GAP = 0.01;        // これ未満しか動いていないフレームは記録しない（停止中に点が溜まるのを防ぐ）
+        const TRAIL_POINT_SPACING = 0.2;   // 補間して埋めるときの点の間隔
+        const TRAIL_MAX_STEPS = 30;        // 1フレームで打つ点の上限（TRAIL_WARP_GAP ぶん動いても間隔を保てる数）
+        // これ以上飛んだら「連続した移動ではない」とみなして軌跡を引き直す。
+        // 6 だと約205px/フレーム（≒12000px/秒）の高速フリックで踏んでしまい軌跡が消えたので広げた。
+        // ステージ切替のワープは20前後動くので、12でも取りこぼさない
+        const TRAIL_WARP_GAP = 12;
+        const TRAIL_MAX_POINTS = 60;       // 軌跡として保持する点の上限
+        function checkObstacleCollisions() {
+            // チュートリアルモード（gameMode === 'idle'）では即死ロジック自体を発火させない（仕様2-1）
+            // ボーナス中も対象外（障害物は片付けている前提だが、状態が壊れても即死しないよう明示的に守る）
+            if (!gameStarted || docked || bonusActive || gameMode !== 'timeattack' || !currentDifficulty) return;
+            if (obstacles.length === 0) return;
+            // 入場直後の保護：ステージ読み込みから SPAWN_PROTECTION_SEC の間は即死判定を止める。
+            // スポーン位置が障害物の軌道上に置かれていると、プレイヤーが操作する前に轢かれて即死してしまうため
+            // （ステージ7・8で実際に発生した）。ステージデータ側も直したが、今後の追加ステージへの安全網として残す
+            if ((Date.now() - stageStartTime) / 1000 < SPAWN_PROTECTION_SEC) {
+                blocks.forEach(b => { b.dangerStart = null; });
+                return;
+            }
+            const grace = DIFFICULTY_SETTINGS[currentDifficulty].graceSec;
+            let anyDanger = false;
+            for (const b of blocks) {
+                const touching = obstacles.some(o => o.data.type !== 'repulsor' && b.body.position.distanceTo(o.mesh.position) < o.radius + OBSTACLE_HIT_MARGIN);
+                if (touching) {
+                    if (!b.dangerStart) b.dangerStart = Date.now();
+                    anyDanger = true;
+                    if ((Date.now() - b.dangerStart) / 1000 > grace) {
+                        document.getElementById('danger-warning').style.opacity = '0';
+                        onDeath();
+                        return;
+                    }
+                } else {
+                    b.dangerStart = null; // 猶予内に離れたらセーフ
+                }
+            }
+            document.getElementById('danger-warning').style.opacity = anyDanger ? '1' : '0';
+        }
+        // 木星（jupiter）の引力パート：各ブロック個別に、距離の2乗に反比例して引っ張る（仮数値、後で調整前提）
+        // 本体への接触判定自体は checkObstacleCollisions の obstacles ループで共通処理される（typeを問わないため）のでここでは引力の方を担当
+        const JUPITER_GRAVITY_K = 8; // 引力の強さ（仮）
+        const JUPITER_GRAVITY_MAX_ACCEL = 3; // 1フレームあたりの最大加速度（近すぎて暴走するのを防ぐ）
+        function applyJupiterGravity() {
+            if (!gameStarted || docked) return;
+            // チュートリアルモードでは木星を完全な飾りにする（見た目と引力範囲リングは出したまま、引力だけ無効）。
+            // 木星の本体には物理ボディがなく、即死判定もこのモードでは働かないため、引力だけ生きていると
+            // ブロックが吸い寄せられて中心にめり込み、二度と取り出せなくなる
+            if (gameMode === 'idle') return;
+            const jupiters = obstacles.filter(o => o.data.type === 'jupiter');
+            if (jupiters.length === 0) return;
+            const dt = FIXED_DT;
+            blocks.forEach(b => {
+                jupiters.forEach(j => {
+                    const range = j.data.gravityRange || 6;
+                    const dx = j.mesh.position.x - b.body.position.x;
+                    const dy = j.mesh.position.y - b.body.position.y;
+                    const dz = j.mesh.position.z - b.body.position.z;
+                    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    if (dist < range && dist > 0.01) {
+                        let pull = Math.min(JUPITER_GRAVITY_K / (dist * dist), JUPITER_GRAVITY_MAX_ACCEL);
+                        // 修正：境界(dist=range)で力が0.222→0のように不連続に切れると不自然なので、
+                        // 外側の1割（rangeの90％以降）でなだらかに0まで減衰させる（力の式自体は変えない）
+                        const fadeStart = range * 0.9;
+                        if (dist > fadeStart) {
+                            const t = (dist - fadeStart) / (range - fadeStart);
+                            pull *= (1 - t);
+                        }
+                        b.body.velocity.x += (dx / dist) * pull * dt;
+                        b.body.velocity.y += (dy / dist) * pull * dt;
+                        b.body.velocity.z += (dz / dist) * pull * dt;
+                    }
+                });
+            });
+        }
+        let dragging = null;
+        let dragGroup = [];
+        let rotating = null;
+        let dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+        let mouseHistory = [];
+        let lastMouseX = 0, lastMouseY = 0;
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        function attemptDock(block) {
+            if (!block) return;
+            blocks.forEach(other => {
+                if (other === block) return;
+                // 修正：既に同じ集団に属する相手とは接続しない（既存の三角形に向けてスナップするとK4過剰拘束になるため）
+                if (getConnectedGroup(block).includes(other)) return;
+                const dist = block.body.position.distanceTo(other.body.position);
+                if (dist < 1.5) {
+                    const dir = new THREE.Vector3().subVectors(other.mesh.position, block.mesh.position).normalize();
+                    const targetPos = other.body.position.vadd(new CANNON.Vec3(dir.x, dir.y, dir.z));
+                    block.body.position.copy(targetPos);
+                    block.mesh.position.copy(block.body.position);
+                    createConnection(block, other);
+                }
+            });
+        }
+        function onMouseDown(e) {
+            if (inputLocked) return;
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const meshes = blocks.map(b => b.mesh);
+            const intersects = raycaster.intersectObjects(meshes);
+            if (intersects.length > 0) {
+                const block = blocks.find(b => b.mesh === intersects[0].object);
+                if (block) {
+                    lastMouseX = e.clientX;
+                    lastMouseY = e.clientY;
+                    if (e.button === 0) {
+                        dragging = block;
+                        block.body.mass = 0;
+                        block.body.updateMassProperties();
+                        block.body.velocity.set(0, 0, 0);
+                        block.body.angularVelocity.set(0, 0, 0);
+                        mouseHistory = [{ x: e.clientX, y: e.clientY, t: Date.now() }];
+                        attemptDock(block);
+                    } else if (e.button === 2) {
+                        rotating = block;
+                    }
+                }
+            }
+        }
+        function onMouseMove(e) {
+            const dx = e.clientX - lastMouseX;
+            const dy = e.clientY - lastMouseY;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            if (dragging) {
+                mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+                const intersectPoint = new THREE.Vector3();
+                raycaster.ray.intersectPlane(dragPlane, intersectPoint);
+                // 連結済みの仲間（クラスター）を毎フレーム最新化し、全員を物理演算を介さず手動で一緒に動かす
+                // （DistanceConstraintに「瞬間移動する相手に追いつかせる」仕事をさせないため、異常回転・吹っ飛びを防ぐ）
+                dragGroup = getConnectedGroup(dragging).filter(b => b !== dragging);
+                dragGroup.forEach(b => {
+                    b.body.mass = 0;
+                    b.body.updateMassProperties();
+                    b.body.velocity.set(0, 0, 0);
+                    b.body.angularVelocity.set(0, 0, 0);
+                });
+                const delta = new CANNON.Vec3(
+                    intersectPoint.x - dragging.body.position.x,
+                    intersectPoint.y - dragging.body.position.y,
+                    intersectPoint.z - dragging.body.position.z
+                );
+                dragging.body.position.copy(intersectPoint);
+                dragGroup.forEach(b => {
+                    b.body.position.x += delta.x;
+                    b.body.position.y += delta.y;
+                    b.body.position.z += delta.z;
+                });
+                attemptDock(dragging);
+                mouseHistory.push({ x: e.clientX, y: e.clientY, t: Date.now() });
+                if (mouseHistory.length > 5) mouseHistory.shift();
+            } else if (rotating) {
+                rotating.mesh.rotation.x += dy * 0.01;
+                rotating.mesh.rotation.y += dx * 0.01;
+                rotating.body.quaternion.copy(rotating.mesh.quaternion);
+            }
+        }
+        function onMouseUp(e) {
+            if (dragging) {
+                dragging.body.mass = 1;
+                dragging.body.updateMassProperties();
+                dragGroup.forEach(b => {
+                    b.body.mass = 1;
+                    b.body.updateMassProperties();
+                });
+                attemptDock(dragging);
+                if (mouseHistory.length >= 2) {
+                    const first = mouseHistory[0];
+                    const last = mouseHistory[mouseHistory.length - 1];
+                    const dt = (last.t - first.t) / 1000;
+                    if (dt > 0) {
+                        const dx = (last.x - first.x) / window.innerWidth;
+                        const dy = (last.y - first.y) / window.innerHeight;
+                        dragging.body.velocity.set(dx * 10, -dy * 10, 0);
+                        dragging.body.angularVelocity.set(dy * 2, dx * 2, 0);
+                    }
+                }
+                dragging = null;
+                dragGroup = [];
+                mouseHistory = [];
+            }
+            rotating = null;
+        }
+        renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+        renderer.domElement.addEventListener('pointerdown', e => { e.preventDefault(); onMouseDown(e); });
+        renderer.domElement.addEventListener('pointermove', onMouseMove);
+        renderer.domElement.addEventListener('pointerup', onMouseUp);
+        renderer.domElement.addEventListener('touchstart', e => { e.preventDefault(); const touch = e.touches[0]; onMouseDown({ clientX: touch.clientX, clientY: touch.clientY, button: 0 }); }, { passive: false });
+        renderer.domElement.addEventListener('touchmove', e => { e.preventDefault(); const touch = e.touches[0]; onMouseMove({ clientX: touch.clientX, clientY: touch.clientY }); }, { passive: false });
+        renderer.domElement.addEventListener('touchend', e => { e.preventDefault(); onMouseUp({}); }, { passive: false });
+        // 修正：ウィンドウリサイズ時にカメラアスペクト比とレンダラーサイズを追従させる（未対応だとクリック座標がずれてドラッグが空振りする）
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        let docked = false;
+        function checkDocking() {
+            if (docked || !gameStarted || bonusActive) return;
+            const elapsed = (Date.now() - stageStartTime) / 1000;
+            if (elapsed < 0.3) return;
+
+            let centerX = 0, centerY = 0, centerZ = 0;
+            let totalSpeed = 0;
+            blocks.forEach(b => {
+                centerX += b.body.position.x;
+                centerY += b.body.position.y;
+                centerZ += b.body.position.z;
+                const pos = b.body.position;
+                const speed = Math.sqrt(b.body.velocity.x ** 2 + b.body.velocity.y ** 2 + b.body.velocity.z ** 2);
+                totalSpeed += speed;
+            });
+            centerX /= blocks.length;
+            centerY /= blocks.length;
+            centerZ /= blocks.length;
+            totalSpeed /= blocks.length;
+
+            const distToAnchor = Math.sqrt(centerX ** 2 + centerY ** 2 + centerZ ** 2);
+
+            // 修正：単なる「辺の数が十分か」ではなく、実際に全ブロックが1つの集団に繋がっているかを BFS で検証（余剰エッジによる水増しを防ぐ）
+            const allConnected = blocks.length > 0 && getConnectedGroup(blocks[0]).length === blocks.length;
+            if (distToAnchor < 2.5 && totalSpeed < 0.5 && allConnected) {
+                docked = true;
+                onDock();
+            }
+        }
+        const PARTICLE_GEO = new THREE.SphereGeometry(0.1, 4, 4); // 全パーティクルで共有（以前は1個ずつ作って解放していなかった）
+        function createParticles(centerPos) {
+            const particleCount = 50;
+            const particles = [];
+            for (let i = 0; i < particleCount; i++) {
+                // マテリアルは1個ずつ透明度が変わるので個別。消えるときに解放する
+                const mat = new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0x00ffaa : 0x00ff00, transparent: true, opacity: 1 });
+                const particle = new THREE.Mesh(PARTICLE_GEO, mat);
+                particle.position.copy(centerPos);
+                particle.velocity = new THREE.Vector3((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
+                scene.add(particle);
+                particles.push(particle);
+            }
+            return particles;
+        }
+        let particles = [];
+        const connectionLines = [];
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // ミュート。音を作る関数の入口で見る共通フラグ（セッション内のみ保持、永続化しない仕様）
+        let muted = false;
+        function playConnectionSound() {
+            if (muted) return;
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            osc.frequency.setValueAtTime(800, audioContext.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(200, audioContext.currentTime + 0.15);
+            osc.type = 'sawtooth';
+            gain.gain.setValueAtTime(0.2, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+            osc.start(audioContext.currentTime);
+            osc.stop(audioContext.currentTime + 0.15);
+        }
+        function playDockingSound() {
+            if (muted) return;
+            const times = [0, 0.1, 0.2, 0.3, 0.4];
+            const frequencies = [100, 150, 200, 300, 500];
+            times.forEach((time, i) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                osc.connect(gain);
+                gain.connect(audioContext.destination);
+                osc.frequency.value = frequencies[i];
+                osc.type = 'sine';
+                gain.gain.setValueAtTime(0.15, audioContext.currentTime + time);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + time + 0.3);
+                osc.start(audioContext.currentTime + time);
+                osc.stop(audioContext.currentTime + time + 0.3);
+            });
+            setTimeout(() => {
+                [659, 784, 988].forEach((freq, i) => {
+                    const osc = audioContext.createOscillator();
+                    const gain = audioContext.createGain();
+                    osc.connect(gain);
+                    gain.connect(audioContext.destination);
+                    osc.frequency.value = freq;
+                    osc.type = 'sine';
+                    gain.gain.setValueAtTime(0.1, audioContext.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+                    osc.start(audioContext.currentTime);
+                    osc.stop(audioContext.currentTime + 0.5);
+                });
+            }, 500);
+        }
+        const stages = [
+            { blocks: [{ pos: [-6, 4, 0], color: 0xff0000 }, { pos: [6, 4, 0], color: 0x00ff00 }, { pos: [0, -5, 0], color: 0x0000ff }, { pos: [-6, -4, 0], color: 0xffff00 }, { pos: [6, -4, 0], color: 0xff00ff }] },
+            { blocks: [{ pos: [-7, 5, 0], color: 0xff0000 }, { pos: [7, 5, 0], color: 0x00ff00 }, { pos: [-7, -5, 0], color: 0x0000ff }, { pos: [7, -5, 0], color: 0xffff00 }, { pos: [0, 6, 0], color: 0xff00ff }, { pos: [0, -6, 0], color: 0x00ffff }, { pos: [5, 0, 0], color: 0xff8800 }] },
+            { blocks: [{ pos: [-8, 6, 0], color: 0xff0000 }, { pos: [8, 6, 0], color: 0x00ff00 }, { pos: [-8, 0, 0], color: 0x0000ff }, { pos: [8, 0, 0], color: 0xffff00 }, { pos: [-8, -6, 0], color: 0xff00ff }, { pos: [0, 7, 0], color: 0xff8800 }, { pos: [6, 3, 0], color: 0x8800ff }, { pos: [0, -7, 0], color: 0x88ff00 }, { pos: [-5, 3, 0], color: 0xff0088 }] },
+            // ステージ4：火星（静的障害物）初登場
+            {
+                blocks: [{ pos: [-7, 5, 0], color: 0xff0000 }, { pos: [7, 5, 0], color: 0x00ff00 }, { pos: [-7, -5, 0], color: 0x0000ff }, { pos: [7, -5, 0], color: 0xffff00 }, { pos: [0, 7, 0], color: 0xff00ff }, { pos: [0, -7, 0], color: 0x00ffff }],
+                obstacles: [{ type: 'mars', pos: [4, 0, 0], radius: 1.2 }]
+            },
+            // ステージ5：火星2つで左右のルートを塞ぐ
+            {
+                blocks: [{ pos: [-8, 5, 0], color: 0xff0000 }, { pos: [8, 5, 0], color: 0x00ff00 }, { pos: [-8, -5, 0], color: 0x0000ff }, { pos: [8, -5, 0], color: 0xffff00 }, { pos: [0, 7, 0], color: 0xff00ff }, { pos: [0, -7, 0], color: 0x00ffff }, { pos: [8, 0, 0], color: 0xff8800 }],
+                obstacles: [{ type: 'mars', pos: [-4, 3, 0], radius: 1.2 }, { type: 'mars', pos: [4, -3, 0], radius: 1.2 }]
+            },
+            // ステージ6：水星（周回障害物）初登場
+            {
+                blocks: [{ pos: [-8, 6, 0], color: 0xff0000 }, { pos: [8, 6, 0], color: 0x00ff00 }, { pos: [-8, -6, 0], color: 0x0000ff }, { pos: [8, -6, 0], color: 0xffff00 }, { pos: [0, 8, 0], color: 0xff00ff }, { pos: [0, -8, 0], color: 0x00ffff }, { pos: [-8, 0, 0], color: 0xff8800 }, { pos: [8, 0, 0], color: 0x8800ff }],
+                obstacles: [{ type: 'mercury', center: [0, 0, 0], orbitRadius: 4.5, speed: 0.8, phase: 0.8, radius: 0.8 }]
+            },
+            // ステージ7：火星＋水星の複合
+            // 内側ブロックは水星の軌道半径5.5から即死半径(0.8+0.9=1.7)以上離した位置に置くこと。
+            // 旧 (-5,4) は原点半径6.403で軌道との差が0.903しかなく、放置すると水星に轢かれて即死していた
+            {
+                blocks: [{ pos: [-8, 6, 0], color: 0xff0000 }, { pos: [8, 6, 0], color: 0x00ff00 }, { pos: [-8, -6, 0], color: 0x0000ff }, { pos: [8, -6, 0], color: 0xffff00 }, { pos: [0, 8, 0], color: 0xff00ff }, { pos: [0, -8, 0], color: 0x00ffff }, { pos: [-8, 0, 0], color: 0xff8800 }, { pos: [8, 0, 0], color: 0x8800ff }, { pos: [-6, 4.8, 0], color: 0x88ff00 }],
+                obstacles: [{ type: 'mars', pos: [3.5, 3.5, 0], radius: 1.1 }, { type: 'mercury', center: [0, 0, 0], orbitRadius: 5.5, speed: 1.0, phase: 3.0, radius: 0.8 }]
+            },
+            // ステージ8：最終ステージ。火星2＋水星2（逆位相の二重軌道）
+            // 内側ブロックは水星2本の軌道半径4.5/6.5から即死半径(0.7+0.9=1.6)以上離すこと（＝原点半径2.9以下か8.1以上）。
+            // 旧 (-5,4)(5,-4) は原点半径6.403で外側軌道6.5とほぼ重なっており、入場1.23秒後に水星が
+            // スポーン位置を0.72秒かけて通過 → マスター(猶予0.4)では操作する間もなく即死していた
+            {
+                blocks: [{ pos: [-9, 6, 0], color: 0xff0000 }, { pos: [9, 6, 0], color: 0x00ff00 }, { pos: [-9, -6, 0], color: 0x0000ff }, { pos: [9, -6, 0], color: 0xffff00 }, { pos: [0, 8, 0], color: 0xff00ff }, { pos: [0, -8, 0], color: 0x00ffff }, { pos: [-9, 0, 0], color: 0xff8800 }, { pos: [9, 0, 0], color: 0x8800ff }, { pos: [-6.6, 5.3, 0], color: 0x88ff00 }, { pos: [6.6, -5.3, 0], color: 0xff0088 }],
+                obstacles: [
+                    { type: 'mars', pos: [-3.5, -3.5, 0], radius: 1.1 },
+                    { type: 'mars', pos: [3.5, 3.5, 0], radius: 1.1 },
+                    { type: 'mercury', center: [0, 0, 0], orbitRadius: 4.5, speed: 1.1, phase: 1.5, radius: 0.7 },
+                    { type: 'mercury', center: [0, 0, 0], orbitRadius: 6.5, speed: 0.7, phase: 4.5, radius: 0.7 }
+                ]
+            },
+            // ステージ9：木星（引力ゾーン）お披露目ステージ。近づくと引っ張られ、中心（本体）に触れると火星と同じ即死判定
+            {
+                // ブロックは木星の引力圏(gravityRange)の外に置くこと。圏内に置くと、プレイヤーが触らなくても
+                // 引力で木星まで運ばれて即死する（旧 (9,-7) は木星から5.315＝引力圏6の内側で、放置すると
+                // 弱い5.77秒／強い5.07秒／マスター4.67秒で確定死していた）。圏外なら力が0なのでその場に留まる
+                blocks: [{ pos: [-9, 7, 0], color: 0xff0000 }, { pos: [9, 7, 0], color: 0x00ff00 }, { pos: [-9, -7, 0], color: 0x0000ff }, { pos: [10, -8.5, 0], color: 0xffff00 }, { pos: [0, 9, 0], color: 0xff00ff }, { pos: [0, -9, 0], color: 0x00ffff }, { pos: [-9, 0, 0], color: 0xff8800 }],
+                obstacles: [{ type: 'jupiter', pos: [5.5, -3, 0], radius: 1.4, gravityRange: 6 }]
+            }
+        ];
+        // 裏ステージ（stages配列には含めず、loadSecretStage()からのみ読み込む）
+        // 解禁条件：タイムアタック・マスター難易度で全ステージ（1～9）をノーミスクリア（マスターは死亡で全消しになる仕様なので、
+            // ここまで到達できた時点でノーミスは既に保証されている）
+        // 内容：火星・水星・木星全てを詰め込んだ本編の集大成ステージ
+        const secretStageData = {
+            blocks: [
+                { pos: [-10, 7, 0], color: 0xff0000 }, { pos: [10, 7, 0], color: 0x00ff00 },
+                // (10,-7) は木星(7,-6)から距離3.162＝引力圏5.5の内側で、放置すると引きずり込まれて
+                // 全難易度で確定死していた（マスターで1.92秒）。引力圏外の角へ退避する
+                { pos: [-10, -7, 0], color: 0x0000ff }, { pos: [11, -10.5, 0], color: 0xffff00 },
+                { pos: [0, 10, 0], color: 0xff00ff }, { pos: [0, -10, 0], color: 0x00ffff },
+                { pos: [-10, 0, 0], color: 0xff8800 }, { pos: [10, 0, 0], color: 0x8800ff },
+                // 旧 (-6,5)(6,-5) は、(6,-5) が木星(7,-6)の即死圏(半径2.2)内に距離1.414でスポーンしており
+                // マスターに限らず全難易度で入場直後に確定死していた。あわせて原点半径7.81が
+                // 水星2(軌道6.5)の通り道にも掛かっていたため、逆対角の原点半径8.81へ退避する
+                { pos: [6.8, 5.6, 0], color: 0x88ff00 }, { pos: [-6.8, -5.6, 0], color: 0xff0088 }
+            ],
+            obstacles: [
+                { type: 'mars', pos: [-3, -3, 0], radius: 1.1 },
+                { type: 'mars', pos: [3, 3, 0], radius: 1.1 },
+                { type: 'mercury', center: [0, 0, 0], orbitRadius: 4.5, speed: 1.2, phase: 2.0, radius: 0.7 },
+                { type: 'mercury', center: [0, 0, 0], orbitRadius: 6.5, speed: 0.9, phase: 5.0, radius: 0.7 },
+                // 木星はアンカー（原点）から十分離して配置（以前のステージ9での反省を反映、即死圈とドッキング圈が重ならないように）
+                { type: 'jupiter', pos: [7, -6, 0], radius: 1.3, gravityRange: 5.5 }
+            ]
+        };
+        let currentStage = 0;
+        let totalScore = 0;
+        let stageStartTime = 0;
+        let startTimeout = null;
+        let gameStarted = false;
+        const STAGE_TIME_LIMIT = 60;
+        // 難易度別パラメータ（バランス調整はここだけ変えればよい）
+        // cpuClearTime: CPUゴーストが1ステージをクリアする目標秒数（仮数値・後日調整）
+        // graceSec: 障害物接触から即死までの警告猶予秒
+        // deathReset: 'stage' = ステージ単位リトライ / 'all' = 全消し（最初から）
+        const DIFFICULTY_SETTINGS = {
+            easy: { label: '弱い', cpuClearTime: 55, graceSec: 1.5, deathReset: 'stage' },
+            normal: { label: '普通', cpuClearTime: 45, graceSec: 1.0, deathReset: 'stage' },
+            hard: { label: '強い', cpuClearTime: 35, graceSec: 0.8, deathReset: 'stage' },
+            veryhard: { label: '超強い', cpuClearTime: 25, graceSec: 0.6, deathReset: 'all' },
+            master: { label: 'マスター', cpuClearTime: 15, graceSec: 0.4, deathReset: 'all' }
+        };
+        // ステージデータの検証。「プレイヤーが何もしていないのに死ぬ」配置を、ステージ追加時に自動で見つけるためのもの。
+        // 過去に3種類の事故を起こしているので、そのそれぞれをルール化してある：
+        //   1. 水星の通り道：ブロックの原点半径が軌道半径に近すぎると、周回してきた水星がスポーン位置を轢く
+        //      （ステージ8で発生。半径差0.097で接触0.72秒 → マスターの猶予0.4秒を超えて入場1.6秒後に確定死）
+        //   2. 静止障害物の即死圏：火星・木星の本体にめり込んでスポーンすると接触が永続する
+        //      （裏ステージで発生。木星の即死圏2.2に対し距離1.414）
+        //   3. 木星の引力圏：即死圏の外でも引力圏の内側なら、触らなくても引き寄せられて最後は必ず死ぬ
+        //      （ステージ9で発生。引力圏6に対し距離5.315で、放置すると4.7〜5.8秒で死亡）
+        //   4. ドッキング圏との重なり：ゴール判定（重心がアンカーから2.5以内）の範囲に即死圏が食い込んでいると、
+        //      運び込んだ瞬間に死ぬ余地が残る（ステージ9の木星配置で一度指摘した件）
+        // 1は接触の継続時間を解析的に求めて猶予秒と突き合わせるので、掠る程度の接触は誤検出しない。
+        function validateStageData(stageData, label) {
+            const issues = [];
+            const blocks = stageData.blocks || [];
+            const obstacles = stageData.obstacles || [];
+            const graces = Object.values(DIFFICULTY_SETTINGS).map(d => ({ label: d.label, sec: d.graceSec }));
+            const dyingAt = sec => graces.filter(g => sec > g.sec).map(g => g.label);
+            const push = (level, rule, detail, dies) => issues.push({ level, stage: label, rule, detail, dies });
+            obstacles.forEach(o => {
+                if (o.type === 'repulsor') {
+                    // 反発フィールドは死なないが、ゴール（アンカー）を範囲に含むと押し返されてドッキングできない恐れがある
+                    const dAnchor = Math.hypot(o.pos[0], o.pos[1]);
+                    if (dAnchor < (o.range || 4) + 2.5) {
+                        push('注意', 'ゴールに反発が届く', `反発フィールドの範囲(${o.range || 4})がゴール圏に${((o.range || 4) + 2.5 - dAnchor).toFixed(2)}食い込む`, []);
+                    }
+                    return;
+                }
+                const kill = o.radius + OBSTACLE_HIT_MARGIN;
+                // ルール4：障害物の即死圏がドッキング圏（アンカーから2.5）に食い込んでいないか
+                const centerDist = o.type === 'mercury' ? o.orbitRadius : Math.hypot(o.pos[0], o.pos[1]);
+                if (centerDist < 2.5 + kill) {
+                    push('注意', 'ドッキング圏との重なり',
+                        `${o.type} の即死圏(${kill.toFixed(2)})がゴール圏に${(2.5 + kill - centerDist).toFixed(2)}食い込む`, []);
+                }
+                blocks.forEach((b, i) => {
+                    const at = `ブロック${i}(${b.pos[0]},${b.pos[1]})`;
+                    if (o.type === 'mercury') {
+                        // ルール1：接触継続時間 = 2*Δ/speed（Δ は距離が kill を下回る角度差）。
+                        // 余弦定理 d^2 = rb^2 + ro^2 - 2*rb*ro*cosΔ を d = kill について解く
+                        const rb = Math.hypot(b.pos[0], b.pos[1]), ro = o.orbitRadius;
+                        if (rb === 0 || ro === 0) return;
+                        const cosLimit = (rb * rb + ro * ro - kill * kill) / (2 * rb * ro);
+                        if (cosLimit >= 1) return; // 一度も接触しない
+                        const halfAngle = Math.acos(Math.max(-1, cosLimit));
+                        const duration = 2 * halfAngle / Math.abs(o.speed || 0.8);
+                        const dies = dyingAt(duration);
+                        if (dies.length) {
+                            push('致命', '水星の通り道',
+                                `${at} 原点半径${rb.toFixed(2)} と軌道${ro} の差${Math.abs(rb - ro).toFixed(2)}（必要${kill.toFixed(2)}）→ 接触${duration.toFixed(2)}秒`, dies);
+                        } else if (duration > 0) {
+                            push('注意', '水星が掠める', `${at} 接触${duration.toFixed(2)}秒（最短猶予${Math.min(...graces.map(g => g.sec))}秒より短く死なない）`, []);
+                        }
+                    } else {
+                        const d = Math.hypot(o.pos[0] - b.pos[0], o.pos[1] - b.pos[1]);
+                        // ルール2：本体にめり込んでいる＝接触が終わらない
+                        if (d < kill) {
+                            push('致命', '即死圏内スポーン', `${at} が ${o.type} から${d.toFixed(3)}（即死圏${kill.toFixed(2)}）`, graces.map(g => g.label));
+                        }
+                        // ルール3：引力圏内は触らなくても引き寄せられて死ぬ
+                        if (o.type === 'jupiter' && d < (o.gravityRange || 6)) {
+                            push('致命', '木星の引力圏内スポーン', `${at} が木星から${d.toFixed(3)}（引力圏${o.gravityRange || 6}）→ 放置で引き寄せられる`, graces.map(g => g.label));
+                        }
+                    }
+                });
+            });
+            return issues;
+        }
+        // 全ステージを検証してコンソールに出す。問題がなければ1行だけ、あれば表で並べる。
+        // window から手動でも呼べるようにしてあるので、ステージデータをいじったら validateAllStages() を叩けばよい
+        function validateAllStages() {
+            let issues = [];
+            stages.forEach((st, i) => { issues = issues.concat(validateStageData(st, `ステージ${i + 1}`)); });
+            issues = issues.concat(validateStageData(secretStageData, '裏ステージ'));
+            const fatal = issues.filter(x => x.level === '致命');
+            if (fatal.length) {
+                console.error(`[ステージ検証] 操作しなくても死ぬ配置が ${fatal.length} 件あります`);
+                console.table(fatal.map(x => ({ ステージ: x.stage, 種別: x.rule, 内容: x.detail, 死ぬ難易度: x.dies.join('/') })));
+            } else {
+                console.log('[ステージ検証] 致命的な配置なし');
+            }
+            const warn = issues.filter(x => x.level === '注意');
+            if (warn.length) {
+                console.warn(`[ステージ検証] 注意 ${warn.length} 件（死にはしないが確認推奨）`);
+                console.table(warn.map(x => ({ ステージ: x.stage, 種別: x.rule, 内容: x.detail })));
+            }
+            return issues;
+        }
+        window.validateAllStages = validateAllStages;
+        validateAllStages();
+        let gameMode = null;          // 'idle' | 'timeattack'
+        let currentDifficulty = null; // DIFFICULTY_SETTINGS のキー
+        let cpuScore = 0;
+        let cpuStageCleared = false;
+        let inSecretStage = false; // 裏ステージプレイ中かどうか。onDock()で通常のNEXT STAGEと区別するのに使う
+        // ボーナスステージ関連の状態
+        let bonusActive = false;
+        let bonusStartTime = 0;
+        let bonusSpawnInterval = null;
+        let bonusOnComplete = null;
+        let bonusesUsedThisRun = 0; // 本編中のランダム発生は1周最大2回まで
+        let bonusBestScore = 0; // 自己ベスト。セッション内のみでリロードでリセット（仕様通り永続化なし）
+        const BONUS_TIME_LIMIT = 30;
+        // 早期終了（全部連結）を判定し始める最低ブロック数。1〜2個では開始直後に即成立してしまうため
+        const BONUS_MIN_BLOCKS_FOR_CLEAR = 15;
+        const BONUS_COLORS = [0xff0000, 0xff3300, 0xff8800, 0xffff00, 0x00ff00, 0x00ffcc, 0x00aaff, 0x8844ff, 0xff0044]; // 虹色をベースに赤を多めに混ぜる
+        // タブ非表示中はrequestAnimationFrameが停止するのにDate.now()は進み続けるため、
+        // 非表示だった時間をstageStartTime・dangerStartに加算して「経過時間」から除外する
+        let hiddenAt = null;
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                hiddenAt = Date.now();
+                // setIntervalは非表示タブでも動き続けるため、タイマーだけ止まってブロックが増え続けるのを防ぐ
+                if (bonusActive && bonusSpawnInterval) { clearInterval(bonusSpawnInterval); bonusSpawnInterval = null; }
+            } else if (hiddenAt !== null) {
+                const hiddenMs = Date.now() - hiddenAt;
+                hiddenAt = null;
+                stageStartTime += hiddenMs;
+                if (bonusActive) bonusStartTime += hiddenMs; // ボーナス中のタイマーも同じ補正を受ける（漏れていた修正）
+                blocks.forEach(b => { if (b.dangerStart) b.dangerStart += hiddenMs; });
+                if (bonusActive && !bonusSpawnInterval) bonusSpawnInterval = setInterval(spawnBonusBlock, 1000);
+            }
+        });
+        function loadStageData(stageData, displayLabel) {
+            if (startTimeout) clearTimeout(startTimeout);
+            document.getElementById('retry-button').style.display = 'none';
+            document.getElementById('next-stage-button').style.display = 'none';
+            clearBoard();
+            docked = false;
+            cpuStageCleared = false;
+            document.getElementById('danger-warning').style.opacity = '0';
+            document.getElementById('cpu-clear-flash').style.opacity = '0';
+            document.getElementById('cpu-vs-result').style.opacity = '0';
+            document.getElementById('cpu-progress-bar').style.background = '#ff00ff';
+            document.getElementById('cpu-progress-bar').style.boxShadow = '0 0 10px #ff00ff';
+            gameStarted = false;
+            document.getElementById('dock-message').style.opacity = '0';
+            document.getElementById('dock-message').textContent = 'DOCKING SUCCESS';
+            document.getElementById('dock-message').style.color = '#00ffaa';
+            document.getElementById('dock-message').style.textShadow = '0 0 20px #00ffaa, 0 0 40px #00ffaa';
+            anchor.material.color.setHex(0x00ffaa);
+            anchor.scale.set(1, 1, 1);
+            stageData.blocks.forEach(blockData => { createBlock(blockData.pos[0], blockData.pos[1], blockData.pos[2], blockData.color); });
+            (stageData.obstacles || []).forEach(obstacleData => createObstacle(obstacleData));
+            document.getElementById('stage-num').textContent = displayLabel;
+            document.getElementById('timer-value').textContent = STAGE_TIME_LIMIT.toFixed(1);
+            stageStartTime = Date.now();
+            // ロード時点で既に非表示なら、補正の起点をロード時刻に張り直す
+            // （非表示中にロードされた場合、ロード前の非表示時間まで加算して未来時刻になるのを防ぐ）
+            if (document.hidden) hiddenAt = Date.now();
+            gameStarted = true;
+            blocks.forEach(b => { b.body.velocity.set((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, 0); });
+        }
+        // 記録・リプレイ用の「今どのステージか」。本編は 1〜9、裏は SECRET、自作は CUSTOM
+        function currentStageLabel() {
+            if (customStageActive) return 'CUSTOM';
+            if (inSecretStage) return 'SECRET';
+            return String(currentStage + 1);
+        }
+        // 死亡・RETRY のときに「今のステージ」を読み直す（自作ステージ中なら自作ステージを読み直す）
+        function reloadCurrentStage() {
+            if (customStageActive && customStageData) loadStageData(customStageData, 'CUSTOM');
+            else loadStage(currentStage);
+        }
+        function loadStage(stageIndex) {
+            inSecretStage = false;
+            loadStageData(stages[stageIndex], stageIndex + 1);
+        }
+        function loadSecretStage() {
+            inSecretStage = true;
+            loadStageData(secretStageData, 'SECRET');
+        }
+        function onTimeUp() {
+            docked = true;
+            const message = document.getElementById('dock-message');
+            message.textContent = 'TIME UP!';
+            message.style.color = '#ff0000';
+            message.style.textShadow = '0 0 20px #ff0000, 0 0 40px #ff0000';
+            message.style.opacity = '1';
+            blocks.forEach(b => { b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
+            later(() => { document.getElementById('retry-button').style.display = 'block'; }, 1200);
+        }
+        function onDeath() {
+            gameStarted = false;
+            emitGameEvent('death', { label: currentStageLabel(), mode: gameMode, difficulty: currentDifficulty });
+            playDeathSound();
+            blocks.forEach(b => { b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
+            const isFullReset = DIFFICULTY_SETTINGS[currentDifficulty].deathReset === 'all';
+            const message = document.getElementById('dock-message');
+            message.textContent = isFullReset ? 'CRASHED! - ALL RESET' : 'CRASHED!';
+            message.style.color = '#ff2200';
+            message.style.textShadow = '0 0 20px #ff2200, 0 0 40px #ff2200';
+            message.style.opacity = '1';
+            later(() => {
+                if (isFullReset) {
+                    // 超強い／マスター：全消し（最初から）
+                    currentStage = 0;
+                    totalScore = 0;
+                    cpuScore = 0;
+                    bonusesUsedThisRun = 0; // 新しい1周なのでボーナスの使用回数も戻す（戻し忘れると以降ボーナスが出なくなる）
+                    document.getElementById('score-value').textContent = 0;
+                    document.getElementById('cpu-score-value').textContent = 0;
+                }
+                // 弱い／普通／強い：現在のステージのみリトライ（スコアは保持）
+                reloadCurrentStage();
+            }, 1800);
+        }
+        function playDeathSound() {
+            if (muted) return;
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            osc.frequency.setValueAtTime(300, audioContext.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.6);
+            osc.type = 'square';
+            gain.gain.setValueAtTime(0.2, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.6);
+            osc.start(audioContext.currentTime);
+            osc.stop(audioContext.currentTime + 0.6);
+        }
+        // ボーナスステージ専用のキラキラした上昇アルペジオループ（本格的な楽曲ファイルは未使用、Web Audio APIで即時生成）
+        let bonusMusicInterval = null;
+        function startBonusMusic() {
+            const melody = [523.25, 659.25, 783.99, 1046.50, 783.99, 659.25, 880.00, 1046.50]; // C5-E5-G5-C6-G5-E5-A5-C6
+            let step = 0;
+            function playNote() {
+                if (muted) return; // 曲の途中でミュートしても次の音から止まる（intervalは回したままにして、解除で復帰）
+                const freq = melody[step % melody.length];
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                osc.connect(gain);
+                gain.connect(audioContext.destination);
+                osc.frequency.value = freq;
+                osc.type = 'sine';
+                gain.gain.setValueAtTime(0.07, audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.35);
+                osc.start(audioContext.currentTime);
+                osc.stop(audioContext.currentTime + 0.35);
+                step++;
+            }
+            playNote();
+            bonusMusicInterval = setInterval(playNote, 220);
+        }
+        function stopBonusMusic() {
+            if (bonusMusicInterval) { clearInterval(bonusMusicInterval); bonusMusicInterval = null; }
+        }
+        // ボーナスステージの盤面を全て片付ける。
+        // 修正：以前は障害物を対象外にしていたが、障害物を消すのは loadStage だけなので
+        // 前ステージの火星・水星・木星がボーナス中も生き残り、降ってきたブロックが即死判定に触れて
+        // ボーナス中に CRASHED が発生していた（そのまま bonusActive が true で固まる）。ここで一緒に破棄する
+        function clearBonusBlocks() {
+            clearBoard();
+            document.getElementById('danger-warning').style.opacity = '0';
+        }
+        // 1秒間隔で上部からブロックを1個降らせる（上限なし）
+        // 修正：落下速度が-1.2で遅すぎ、上で待ち構えていれば誰でも取れてしまうとの指摘を受け、
+        // 落下速度を上げ、左右のブレ幅も広げて取りこぼすリスクを作った（仮数値、体感で要調整）
+        function spawnBonusBlock() {
+            const x = (Math.random() - 0.5) * 16;
+            const y = 11;
+            const color = BONUS_COLORS[Math.floor(Math.random() * BONUS_COLORS.length)];
+            createBlock(x, y, 0, color);
+            const b = blocks[blocks.length - 1];
+            b.body.velocity.set((Math.random() - 0.5) * 0.6, -2.5, 0);
+        }
+        // ボーナスHUD（クラスターサイズ・タイマー）を毎フレーム更新し、終了条件（全部連結 or 時間切れ）を判定
+        function updateBonusHUD() {
+            const largest = getLargestClusterSize();
+            document.getElementById('bonus-cluster-value').textContent = largest;
+            document.getElementById('bonus-total-value').textContent = blocks.length;
+            const elapsed = (Date.now() - bonusStartTime) / 1000;
+            const remaining = Math.max(0, BONUS_TIME_LIMIT - elapsed);
+            document.getElementById('bonus-timer-value').textContent = remaining.toFixed(1);
+            // 修正：blocks.length > 0 だと、開始直後（1個目を降らせた時点）に largest === blocks.length === 1 が
+            // 成立して1フレーム目で即終了していた。ゲームとして成立する下限個数を満たすまで早期終了は判定しない
+            if (blocks.length >= BONUS_MIN_BLOCKS_FOR_CLEAR && largest === blocks.length) {
+                endBonusStage(); // 早期終了：全部が1つにつながった
+            } else if (remaining <= 0) {
+                endBonusStage();
+            }
+        }
+        // onComplete：ボーナス終了後に続ける処理（本編の次ステージへ）。nullなら全クリア後の最終ボーナス扱い
+        function startBonusStage(onComplete) {
+            bonusOnComplete = onComplete || null;
+            document.getElementById('stage-number').style.display = 'none';
+            document.getElementById('score-display').style.display = 'none';
+            document.getElementById('timer-display').style.display = 'none';
+            document.getElementById('cpu-ghost').style.display = 'none';
+            document.getElementById('connection-status').style.display = 'none';
+            // RESETは隠さない：ボーナス中もプレイヤーが抜けられるようにする（30秒間拘束しない）
+            document.getElementById('reset-button').style.display = 'block';
+            document.getElementById('next-stage-button').style.display = 'none';
+            document.getElementById('retry-button').style.display = 'none';
+            clearBonusBlocks();
+            docked = false;
+            document.getElementById('dock-message').style.opacity = '0';
+            anchor.visible = false; // ボーナスにゴールはないのでアンカーは隠す
+            // 金色テーマ。canvasが不透明(alpha:false, クリアカラー#000)で全面を覆うため、
+            // body側の背景だけでは画面に出ない。Three.js の scene.background も合わせて切り替える
+            document.body.style.background = 'radial-gradient(ellipse at bottom, #443300 0%, #1a1200 100%)';
+            scene.background = new THREE.Color(0x241a00);
+            document.getElementById('bonus-hud').style.display = 'block';
+            document.getElementById('bonus-best-value').textContent = bonusBestScore;
+            document.getElementById('bonus-cluster-value').textContent = '0';
+            document.getElementById('bonus-total-value').textContent = '0';
+            document.getElementById('bonus-timer-value').textContent = BONUS_TIME_LIMIT.toFixed(1);
+            const flash = document.getElementById('bonus-flash');
+            flash.style.opacity = '1';
+            setTimeout(() => { flash.style.opacity = '0'; }, 1500);
+            startBonusMusic();
+            bonusStartTime = Date.now();
+            gameStarted = true;
+            bonusActive = true;
+            bonusSpawnInterval = setInterval(spawnBonusBlock, 1000);
+            spawnBonusBlock();
+        }
+        function endBonusStage() {
+            bonusActive = false;
+            gameStarted = false;
+            clearInterval(bonusSpawnInterval);
+            bonusSpawnInterval = null;
+            stopBonusMusic();
+            const finalScore = getLargestClusterSize();
+            if (finalScore > bonusBestScore) bonusBestScore = finalScore;
+            emitGameEvent('bonusEnd', { score: finalScore });
+            document.getElementById('bonus-best-value').textContent = bonusBestScore;
+            const message = document.getElementById('dock-message');
+            message.textContent = `BONUS RESULT: ${finalScore}`;
+            message.style.color = '#ffcc00';
+            message.style.textShadow = '0 0 20px #ffcc00, 0 0 40px #ff8800';
+            message.style.opacity = '1';
+            later(() => {
+                message.style.opacity = '0';
+                document.getElementById('bonus-hud').style.display = 'none';
+                document.body.style.background = 'radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%)';
+                scene.background = null; // 通常時のクリアカラー（黒）に戻す
+                anchor.visible = true;
+                clearBonusBlocks();
+                document.getElementById('stage-number').style.display = 'block';
+                document.getElementById('score-display').style.display = 'block';
+                if (gameMode === 'timeattack') {
+                    document.getElementById('timer-display').style.display = 'block';
+                    document.getElementById('cpu-ghost').style.display = 'block';
+                }
+                document.getElementById('reset-button').style.display = 'block';
+                document.getElementById('title-button').style.display = 'block';
+                document.getElementById('sound-button').style.display = 'block';
+                const cb = bonusOnComplete;
+                bonusOnComplete = null;
+                if (cb) {
+                    cb();
+                } else {
+                    document.getElementById('dock-message').textContent = 'ALL STAGES CLEAR!';
+                    document.getElementById('dock-message').style.color = '#00ffaa';
+                    document.getElementById('dock-message').style.textShadow = '0 0 20px #00ffaa, 0 0 40px #00ffaa';
+                    document.getElementById('dock-message').style.opacity = '1';
+                }
+            }, 2500);
+        }
+        function showEnding() {
+            // 裏ステージクリア後の特別演出：画面を黒にフェードアウトしてから、静かにメッセージだけが残る（静かな雰囲気を意図して、他のクリア演出とはあえてテンポを変えている）
+            gameStarted = false;
+            inSecretStage = false;
+            emitGameEvent('secretClear', { difficulty: currentDifficulty });
+            const fade = document.createElement('div');
+            fade.style.cssText = 'position: fixed; top:0; left:0; width:100vw; height:100vh; background:#000; opacity:0; z-index:300; transition: opacity 3s; pointer-events: none;';
+            document.body.appendChild(fade);
+            requestAnimationFrame(() => { fade.style.opacity = '1'; });
+            setTimeout(() => {
+                document.getElementById('stage-number').style.display = 'none';
+                document.getElementById('score-display').style.display = 'none';
+                document.getElementById('timer-display').style.display = 'none';
+                document.getElementById('cpu-ghost').style.display = 'none';
+                document.getElementById('reset-button').style.display = 'none';
+                document.getElementById('title-button').style.display = 'none';
+                document.getElementById('sound-button').style.display = 'none';
+                document.getElementById('connection-status').style.display = 'none';
+                document.getElementById('dock-message').style.opacity = '0';
+                const thankYou = document.createElement('div');
+                thankYou.textContent = 'Thank you for playing this game.';
+                thankYou.style.cssText = 'position: fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:#ffffff; font-family: monospace; font-size: 28px; letter-spacing: 3px; opacity:0; transition: opacity 2.5s; z-index: 301; text-align:center; white-space: nowrap; pointer-events: none;';
+                document.body.appendChild(thankYou);
+                requestAnimationFrame(() => { thankYou.style.opacity = '1'; });
+                // エンディングでもリスタート手段だけは残す（RESETがないと F5 以外で抜けられなくなる）。
+                // 余韻を壊さないよう、Thank you のフェードイン(2.5秒)が終わってから静かに出す。
+                // 黒フェードが z-index:300、文字が 301 なので、それより前面に出さないと黒幕の裏に隠れる。
+                // 表示のきっかけに rAF を使うと非表示タブでは発火しないため、ここは setTimeout で行う
+                setTimeout(() => {
+                    const reset = document.getElementById('reset-button');
+                    reset.style.zIndex = '302';
+                    reset.style.opacity = '0';
+                    reset.style.display = 'block';
+                    setTimeout(() => { reset.style.opacity = '1'; }, 30);
+                }, 2600);
+            }, 3200);
+        }
+        function onDock() {
+            playDockingSound();
+            const message = document.getElementById('dock-message');
+            message.style.opacity = '1';
+            // 置き換えではなく追加する（置き換えると、まだ残っている粒が配列から外れて画面に取り残される）
+            particles.push(...createParticles(new THREE.Vector3(0, 0, 0)));
+            const flash = document.createElement('div');
+            flash.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: white; opacity: 0.8; z-index: 150; pointer-events: none;';
+            document.body.appendChild(flash);
+            setTimeout(() => { flash.style.transition = 'opacity 0.5s'; flash.style.opacity = '0'; setTimeout(() => document.body.removeChild(flash), 500); }, 100);
+            blocks.forEach(b => { b.mesh.material.color.setHex(0x00ff00); b.mesh.material.emissive.setHex(0x00ff00); b.mesh.material.emissiveIntensity = 0.8; b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
+            anchor.material.color.setHex(0x00ffff);
+            anchor.material.opacity = 1;
+            const clearTime = (Date.now() - stageStartTime) / 1000;
+            const timeBonus = Math.max(0, 60 - clearTime);
+            const stageScore = Math.floor(1000 + timeBonus * 10);
+            totalScore += stageScore;
+            document.getElementById('score-value').textContent = totalScore;
+            // 追加：タイムアタック中なら、CPUとのクリアタイムを比べて勝敗を一瞬表示する（「競っている感」を補強）
+            if (gameMode === 'timeattack' && currentDifficulty) {
+                const cpuTime = DIFFICULTY_SETTINGS[currentDifficulty].cpuClearTime;
+                const resultEl = document.getElementById('cpu-vs-result');
+                if (clearTime < cpuTime) {
+                    resultEl.textContent = `YOU WIN! (CPUより${(cpuTime - clearTime).toFixed(1)}秒早い)`;
+                    resultEl.style.color = '#00ffaa';
+                } else {
+                    resultEl.textContent = `CPUの勝ち (${(clearTime - cpuTime).toFixed(1)}秒差)`;
+                    resultEl.style.color = '#ff0044';
+                }
+                resultEl.style.opacity = '1';
+                setTimeout(() => { resultEl.style.opacity = '0'; }, 3000);
+            }
+            emitGameEvent('stageClear', { clearTime, stageScore, label: currentStageLabel(), mode: gameMode, difficulty: currentDifficulty });
+            if (customStageActive) {
+                // 自作ステージのテストプレイ：本編の進行（次ステージ・ボーナス・裏ステージ）には進まない
+                return;
+            } else if (currentStage < stages.length - 1) {
+                later(() => { document.getElementById('next-stage-button').style.display = 'block'; }, 1000);
+            } else if (inSecretStage) {
+                // 裏ステージクリア：特別な締めくくり演出へ
+                later(() => { showEnding(); }, 1000);
+            } else if (gameMode === 'timeattack' && currentDifficulty === 'master') {
+                // マスター難易度で全ステージ（1～9）ノーミスクリア（死亡すれば全消しでここまで戻ってくること自体がノーミスの証明）
+                // → 裏ステージを解禁
+                later(() => { loadSecretStage(); }, 1000);
+            } else {
+                // 全ステージクリア後のご礋美ボーナス（callbackなしで呼ぶと、終了後にALL STAGES CLEAR表示になる）
+                later(() => { startBonusStage(null); }, 1000);
+            }
+        }
+        // 難易度選択（チュートリアルはモード選択）の直後に操作説明を挟む。ここのSTARTで実際に開始する
+        function showControlsScreen() {
+            document.getElementById('mode-screen').style.display = 'none';
+            document.getElementById('difficulty-screen').style.display = 'none';
+            document.getElementById('controls-screen').style.display = 'flex';
+        }
+        function startGame() {
+            document.getElementById('mode-screen').style.display = 'none';
+            document.getElementById('difficulty-screen').style.display = 'none';
+            document.getElementById('controls-screen').style.display = 'none';
+            document.getElementById('reset-button').style.display = 'block';
+            document.getElementById('title-button').style.display = 'block';
+            document.getElementById('sound-button').style.display = 'block';
+            document.getElementById('stage-number').style.display = 'block';
+            document.getElementById('score-display').style.display = 'block';
+            const isTimeAttack = gameMode === 'timeattack';
+            document.getElementById('timer-display').style.display = isTimeAttack ? 'block' : 'none';
+            document.getElementById('cpu-ghost').style.display = isTimeAttack ? 'block' : 'none';
+            if (isTimeAttack && currentDifficulty) {
+                document.getElementById('cpu-difficulty-label').textContent = DIFFICULTY_SETTINGS[currentDifficulty].label;
+            }
+            currentStage = 0;
+            totalScore = 0;
+            cpuScore = 0;
+            document.getElementById('score-value').textContent = 0;
+            emitGameEvent('runStart', { mode: gameMode, difficulty: currentDifficulty });
+            loadStage(currentStage);
+        }
+        document.getElementById('start-button').addEventListener('click', function () {
+            document.getElementById('title-screen').style.display = 'none';
+            document.getElementById('mode-screen').style.display = 'flex';
+        });
+        document.getElementById('mode-idle-button').addEventListener('click', function () {
+            gameMode = 'idle';
+            showControlsScreen(); // チュートリアルは難易度選択がないので、ここから操作説明へ
+        });
+        document.getElementById('mode-timeattack-button').addEventListener('click', function () {
+            gameMode = 'timeattack';
+            document.getElementById('mode-screen').style.display = 'none';
+            document.getElementById('difficulty-screen').style.display = 'flex';
+        });
+        document.querySelectorAll('.difficulty-button').forEach(btn => {
+            btn.addEventListener('click', function () {
+                currentDifficulty = this.dataset.difficulty;
+                showControlsScreen();
+            });
+        });
+        document.getElementById('controls-start-button').addEventListener('click', function () {
+            startGame();
+        });
+        document.getElementById('reset-button').addEventListener('click', function () { location.reload(); });
+        // TITLE：リロードせず、ゲーム内の演出（暗転→タイトル）として戻る。
+        // RESET（完全リロード）との違いは bonusBestScore（自己ベスト）が残ること。
+        function returnToTitle() {
+            // --- 動いているタイマー類を止める ---
+            // 死亡後の再読み込み・RETRY表示・次ステージ表示などの予約も全部取り消す（取り消さないとタイトルの裏で進行する）
+            cancelFlowTimers();
+            if (startTimeout) { clearTimeout(startTimeout); startTimeout = null; }
+            stopBonusMusic();
+            if (bonusSpawnInterval) { clearInterval(bonusSpawnInterval); bonusSpawnInterval = null; }
+            // --- ゲーム進行の状態を初期化（bonusBestScore だけは意図的に残す）---
+            gameStarted = false;
+            docked = false;
+            inSecretStage = false;
+            cpuStageCleared = false;
+            bonusActive = false;
+            bonusStartTime = 0;
+            bonusOnComplete = null;
+            bonusesUsedThisRun = 0;
+            gameMode = null;
+            currentDifficulty = null;
+            customStageActive = false;
+            customStageData = null;
+            inputLocked = false;
+            emitGameEvent('title', {});
+            currentStage = 0;
+            totalScore = 0;
+            cpuScore = 0;
+            // --- 盤面を空にする ---
+            clearBoard();
+            // --- 見た目をタイトル前の状態に戻す（ボーナスの金背景・ドッキング後のアンカー等）---
+            scene.background = null;
+            document.body.style.background = 'radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%)';
+            anchor.visible = true;
+            anchor.material.color.setHex(0x00ffaa);
+            anchor.scale.set(1, 1, 1);
+            // --- HUD・ボタンをすべて隠し、表示物をリセット ---
+            ['reset-button', 'title-button', 'sound-button', 'stage-number', 'score-display', 'timer-display',
+                'cpu-ghost', 'connection-status', 'bonus-hud', 'next-stage-button', 'retry-button'].forEach(id => {
+                    document.getElementById(id).style.display = 'none';
+                });
+            const msg = document.getElementById('dock-message');
+            msg.style.opacity = '0';
+            msg.textContent = 'DOCKING SUCCESS';
+            msg.style.color = '#00ffaa';
+            msg.style.textShadow = '0 0 20px #00ffaa, 0 0 40px #00ffaa';
+            document.getElementById('danger-warning').style.opacity = '0';
+            document.getElementById('cpu-clear-flash').style.opacity = '0';
+            document.getElementById('cpu-vs-result').style.opacity = '0';
+            document.getElementById('cpu-progress-bar').style.background = '#ff00ff';
+            document.getElementById('cpu-progress-bar').style.height = '0%';
+            document.getElementById('score-value').textContent = 0;
+            document.getElementById('cpu-score-value').textContent = 0;
+            // --- タイトルへ ---
+            document.getElementById('title-screen').style.display = 'flex';
+        }
+        document.getElementById('title-button').addEventListener('click', function () {
+            // showEnding と同じ「黒フェード→切り替え」パターン。暗転が最前面(400)でクリックも吸うので、遷移中の誤操作は起きない
+            const fade = document.createElement('div');
+            fade.style.cssText = 'position: fixed; top:0; left:0; width:100vw; height:100vh; background:#000; opacity:0; z-index:400; transition: opacity 0.5s;';
+            document.body.appendChild(fade);
+            // 表示のきっかけは rAF ではなく setTimeout（非表示タブでも動くように。showEnding の RESET 復活と同じ理由）
+            setTimeout(() => { fade.style.opacity = '1'; }, 30);
+            setTimeout(() => {
+                returnToTitle();
+                fade.style.opacity = '0';
+                setTimeout(() => { fade.remove(); }, 600);
+            }, 600);
+        });
+        // SOUND：ON/OFF切り替え。ミュート中はグレーで消灯した見た目にする
+        (function () {
+            const sb = document.getElementById('sound-button');
+            const currentColor = () => muted ? '#666666' : '#00ffaa';
+            function refresh() {
+                sb.textContent = muted ? 'SOUND: OFF' : 'SOUND: ON';
+                sb.style.color = currentColor();
+                sb.style.borderColor = currentColor();
+                sb.style.background = 'transparent';
+            }
+            sb.addEventListener('click', function () { muted = !muted; refresh(); });
+            // 色が状態で変わるため、他ボタンのようなインラインonmouseoverではなくここで面倒を見る
+            sb.addEventListener('mouseover', function () { sb.style.background = currentColor(); sb.style.color = '#000'; });
+            sb.addEventListener('mouseout', refresh);
+        })();
+        document.getElementById('next-stage-button').addEventListener('click', function () {
+            document.getElementById('next-stage-button').style.display = 'none';
+            // 本編中のランダムボーナス（30%、、1周最大2回まで）
+            if (bonusesUsedThisRun < 2 && Math.random() < 0.3) {
+                bonusesUsedThisRun++;
+                startBonusStage(() => { currentStage++; loadStage(currentStage); });
+            } else {
+                currentStage++;
+                loadStage(currentStage);
+            }
+        });
+        document.getElementById('retry-button').addEventListener('click', function () {
+            document.getElementById('retry-button').style.display = 'none';
+            reloadCurrentStage();
+        });
+        // 常時表示ステータス欄：連結状況とアンカーまでの距離感を状態に応じて出し分ける
+        function updateConnectionStatus() {
+            const statusEl = document.getElementById('connection-status');
+            if (!gameStarted || docked || blocks.length === 0 || bonusActive) {
+                statusEl.style.display = 'none';
+                return;
+            }
+            statusEl.style.display = 'block';
+            const totalNeeded = blocks.length - 1;
+            // 修正：BFSで実際の連結集団のサイズを見る（余剰エッジによる誤表示を防ぐ）
+            const groupSize = getConnectedGroup(blocks[0]).length;
+            const allConnected = groupSize === blocks.length;
+            if (!allConnected) {
+                const remaining = blocks.length - groupSize;
+                statusEl.style.color = '#88ffcc';
+                statusEl.textContent = `連結: ${groupSize}/${blocks.length}　あと${remaining}個を合流させよう`;
+            } else {
+                let cx = 0, cy = 0, cz = 0;
+                blocks.forEach(b => { cx += b.body.position.x; cy += b.body.position.y; cz += b.body.position.z; });
+                cx /= blocks.length; cy /= blocks.length; cz /= blocks.length;
+                const dist = Math.sqrt(cx * cx + cy * cy + cz * cz);
+                if (dist < 5) {
+                    statusEl.style.color = '#ffff00';
+                    statusEl.textContent = `もうすぐ！ゆっくり止めて（距離 ${dist.toFixed(1)}）`;
+                } else {
+                    statusEl.style.color = '#00ffaa';
+                    statusEl.textContent = `全部つながった！中央へ運ぼう（距離 ${dist.toFixed(1)}）`;
+                }
+            }
+        }
+        function animate(now) {
+            requestAnimationFrame(animate);
+            const frameDt = consumeFrameTime(now);
+            if (controls) controls.update();
+            stepPhysics(frameDt);
+            checkCollisions();
+            checkDocking();
+            updateConnectionStatus();
+            if (bonusActive) updateBonusHUD();
+            obstacles.forEach(o => {
+                if (o.data.type === 'mercury') {
+                    const t = (Date.now() - stageStartTime) / 1000 * (o.data.speed || 0.8) + (o.data.phase || 0);
+                    o.mesh.position.set(
+                        o.data.center[0] + Math.cos(t) * o.data.orbitRadius,
+                        o.data.center[1] + Math.sin(t) * o.data.orbitRadius,
+                        o.data.center[2]
+                    );
+                }
+                o.mesh.rotation.y += 0.3 * frameDt; // 以前は1フレーム0.005（60Hz換算で毎秒0.3）
+            });
+            checkObstacleCollisions();
+            // applyJupiterGravity() は stepPhysics() の各ステップ内へ移動した
+            blocks.forEach(b => {
+                // 軌跡は「速度」ではなく「前フレームから実際に動いた距離」で記録する。
+                // ドラッグ中は mass=0 にして body.position を直接書き換えているため velocity は常に0で、
+                // 速度基準だとドラッグ中に1点も記録されない。その結果、指を離した瞬間に
+                // 「掴む前の古い点」と「離した場所」が1本の直線でつながり、レーザー光線に見えていた
+                if (!b.trailPrev) b.trailPrev = b.mesh.position.clone();
+                const prev = b.trailPrev;
+                syncMeshFromBody(b);
+                const gap = prev.distanceTo(b.mesh.position);
+                if (docked) {
+                    // ドッキング後は軌跡を伸ばさない
+                } else if (gap > TRAIL_WARP_GAP) {
+                    // ステージ読み込みやドッキング時のスナップなど、連続していない移動。
+                    // ここを補間すると画面を横断する直線になってしまうので、前の軌跡は捨てて引き直す
+                    b.trail.length = 0;
+                } else if (gap > TRAIL_MIN_GAP) {
+                    // 1フレームの移動量が大きいと点が飛び飛びになりカクつくので、間を等間隔で補間する
+                    const steps = Math.min(TRAIL_MAX_STEPS, Math.max(1, Math.ceil(gap / TRAIL_POINT_SPACING)));
+                    for (let s = 1; s <= steps; s++) {
+                        const interp = prev.clone().lerp(b.mesh.position, s / steps);
+                        b.trail.push({ position: interp, opacity: 1.0 });
+                    }
+                    if (b.trail.length > TRAIL_MAX_POINTS) b.trail.splice(0, b.trail.length - TRAIL_MAX_POINTS);
+                }
+                b.trailPrev.copy(b.mesh.position);
+                // 使い回している線の頂点を今フレームの軌跡で上書きし、使う点数だけ描画する
+                const n = Math.min(b.trail.length, TRAIL_MAX_POINTS);
+                if (n > 1) {
+                    const attr = b.trailLine.geometry.attributes.position;
+                    for (let i = 0; i < n; i++) {
+                        const p = b.trail[i].position;
+                        attr.setXYZ(i, p.x, p.y, p.z);
+                    }
+                    attr.needsUpdate = true;
+                    b.trailLine.geometry.setDrawRange(0, n);
+                    b.trailLine.visible = true;
+                } else {
+                    b.trailLine.visible = false;
+                }
+                const trailFade = 3.0 * frameDt; // 以前は1フレーム0.05（60Hzで約0.33秒で消える）。秒基準にして画面に依存させない
+                b.trail.forEach(t => { t.opacity -= trailFade; });
+                b.trail = b.trail.filter(t => t.opacity > 0);
+            });
+            anchor.rotation.y += 0.6 * frameDt;
+            starfield.rotation.y += 0.012 * frameDt;
+            starfield.rotation.x += 0.006 * frameDt;
+            connectionLines.forEach(conn => {
+                const direction = new THREE.Vector3().subVectors(conn.blockB.mesh.position, conn.blockA.mesh.position);
+                const distance = direction.length();
+                const midpoint = new THREE.Vector3().addVectors(conn.blockA.mesh.position, conn.blockB.mesh.position).multiplyScalar(0.5);
+                conn.line.position.copy(midpoint);
+                conn.line.scale.y = distance;
+                conn.line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+            });
+            // 後ろから回す（前から splice すると1個おきに取り残しが出ていた）。消えたものはマテリアルも解放する
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.position.addScaledVector(p.velocity, frameDt);
+                p.material.opacity -= 1.2 * frameDt;
+                if (p.material.opacity <= 0) { scene.remove(p); p.material.dispose(); particles.splice(i, 1); }
+            }
+            if (gameStarted && gameMode === 'timeattack') {
+                const elapsed = (Date.now() - stageStartTime) / 1000;
+                const remaining = Math.max(0, STAGE_TIME_LIMIT - elapsed);
+                document.getElementById('timer-value').textContent = remaining.toFixed(1);
+                if (!docked && remaining <= 0) { docked = true; onTimeUp(); }
+                // CPUゴースト：目標クリアタイムから進捗とスコアを逆算して表示するだけ（実プレイはしない）
+                if (currentDifficulty) {
+                    const cpuTime = DIFFICULTY_SETTINGS[currentDifficulty].cpuClearTime;
+                    const cpuProgress = Math.min(1, elapsed / cpuTime);
+                    if (cpuProgress >= 1 && !cpuStageCleared) {
+                        cpuStageCleared = true;
+                        cpuScore += Math.floor(1000 + Math.max(0, STAGE_TIME_LIMIT - cpuTime) * 10);
+                        // 追加：CPUがクリアした瞬間、一言フラッシュして「競っている感」を出す
+                        const clearFlash = document.getElementById('cpu-clear-flash');
+                        clearFlash.style.opacity = '1';
+                        setTimeout(() => { clearFlash.style.opacity = '0'; }, 1500);
+                    }
+                    const bar = document.getElementById('cpu-progress-bar');
+                    bar.style.height = (cpuProgress * 100) + '%';
+                    // 追加：クリアに近づくほどバーの色を危険色（赤）に寄せて緊張感を出す（進捗75％から徐々に変化）
+                    if (cpuStageCleared) {
+                        bar.style.background = '#ff0044';
+                        bar.style.boxShadow = '0 0 14px #ff0044';
+                    } else if (cpuProgress > 0.75) {
+                        const t = (cpuProgress - 0.75) / 0.25;
+                        const blue = Math.round(255 * (1 - t) + 68 * t);
+                        bar.style.background = `rgb(255, 0, ${blue})`;
+                        bar.style.boxShadow = `0 0 10px rgb(255, 0, ${blue})`;
+                    } else {
+                        bar.style.background = '#ff00ff';
+                        bar.style.boxShadow = '0 0 10px #ff00ff';
+                    }
+                    document.getElementById('cpu-score-value').textContent = cpuScore;
+                }
+            }
+            frameHooks.forEach(fn => fn(frameDt));
+            if (docked) {
+                const scale = 1 + Math.sin(Date.now() * 0.005) * 0.2;
+                anchor.scale.set(scale, scale, scale);
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+    <!-- FEATURES V2 START -->
+    <script>
+        // =====================================================================
+        // 追加機能（Ver.2）: ステージエディター / 記録・実績 / リプレイ・記録型ゴースト / 反発フィールド / 自動生成 / AUTO DEMO
+        // 本体（上の <script>）とは emitGameEvent・physicsHooks・frameHooks・inputLocked だけでつながる
+        // =====================================================================
+        (function injectFeatureStyles() {
+            const css = `
+            .sub-menu-button { font-size: 18px; padding: 12px 40px; background: transparent; color: #66ccff; border: 2px solid #66ccff; cursor: pointer; font-family: monospace; letter-spacing: 3px; transition: all 0.3s; min-width: 340px; }
+            .sub-menu-button:hover { background: #66ccff; color: #000; }
+            .cg-panel { position: fixed; z-index: 220; font-family: monospace; color: #cfe6dd; background: rgba(4, 10, 16, 0.92); border: 1px solid #1f6f5a; box-sizing: border-box; }
+            .cg-panel h3 { margin: 0 0 10px; color: #00ffaa; letter-spacing: 3px; font-size: 15px; font-weight: normal; }
+            .cg-panel h4 { margin: 14px 0 6px; color: #7fdcc0; font-size: 12px; letter-spacing: 2px; font-weight: normal; }
+            .cg-btn { font-family: monospace; font-size: 12px; letter-spacing: 1px; padding: 6px 10px; margin: 2px; background: transparent; color: #00ffaa; border: 1px solid #00ffaa; cursor: pointer; }
+            .cg-btn:hover, .cg-btn.on { background: #00ffaa; color: #000; }
+            .cg-btn.warn { color: #ff6644; border-color: #ff6644; }
+            .cg-btn.warn:hover { background: #ff6644; color: #000; }
+            .cg-btn:disabled { opacity: 0.35; cursor: default; }
+            .cg-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 12px; }
+            .cg-row label { width: 92px; color: #8fa3b0; }
+            .cg-row input, .cg-row select { width: 110px; background: #08141c; color: #cfe6dd; border: 1px solid #2b4f5f; font-family: monospace; font-size: 12px; padding: 3px; }
+            .cg-issues { font-size: 11px; line-height: 1.6; max-height: 150px; overflow-y: auto; }
+            .cg-fatal { color: #ff5544; } .cg-warn { color: #ffaa44; } .cg-ok { color: #00ffaa; }
+            .cg-table { border-collapse: collapse; font-size: 12px; margin: 6px 0 14px; }
+            .cg-table th, .cg-table td { border: 1px solid #1f3f4a; padding: 4px 8px; text-align: center; }
+            .cg-table th { color: #7fdcc0; font-weight: normal; }
+            .cg-hint { font-size: 11px; color: #7e93a0; line-height: 1.6; }
+            #cg-toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 500; font-family: monospace; color: #000; background: #ffcc00; padding: 10px 22px; letter-spacing: 2px; font-size: 14px; opacity: 0; transition: opacity 0.4s; pointer-events: none; box-shadow: 0 0 20px #ffaa00; }
+            .cg-hud-btn { position: fixed; top: 20px; font-size: 14px; padding: 12px 16px; background: transparent; color: #66ccff; border: 2px solid #66ccff; cursor: pointer; font-family: monospace; letter-spacing: 2px; z-index: 50; display: none; }
+            .cg-hud-btn:hover { background: #66ccff; color: #000; }
+            @media (max-width: 700px) { .cg-panel { font-size: 11px; } .sub-menu-button { min-width: 0; width: 90vw; } }
+            `;
+            const st = document.createElement('style');
+            st.textContent = css;
+            document.head.appendChild(st);
+        })();
+        // DOM を作る小さな道具。文字は必ず textContent で入れる（読み込んだJSONのステージ名などをHTMLとして解釈させない）
+        function el(tag, attrs, children) {
+            const e = document.createElement(tag);
+            Object.entries(attrs || {}).forEach(([k, v]) => {
+                if (k === 'class') e.className = v;
+                else if (k === 'text') e.textContent = v;
+                else if (k === 'style') e.style.cssText = v;
+                else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+                else e.setAttribute(k, v);
+            });
+            (children || []).forEach(c => { if (c) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+            return e;
+        }
+        function toast(text) {
+            let t = document.getElementById('cg-toast');
+            if (!t) { t = el('div', { id: 'cg-toast' }); document.body.appendChild(t); }
+            t.textContent = text;
+            t.style.opacity = '1';
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => { t.style.opacity = '0'; }, 2600);
+        }
+        // localStorage はプライベートモード等で例外を投げることがあるので、失敗しても遊べるように包む
+        function storageGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+        function storageSet(key, value) { try { localStorage.setItem(key, value); return true; } catch (e) { console.warn('[save] 保存できませんでした', e); return false; } }
+        function storageRemove(key) { try { localStorage.removeItem(key); } catch (e) { } }
+
+        // ---------------------------------------------------------------------
+        // 記録・実績（セーブデータ）
+        // ---------------------------------------------------------------------
+        const SAVE_KEY = 'cometGravity.save';
+        const SAVE_VERSION = 1;
+        const DIFF_KEYS = ['easy', 'normal', 'hard', 'veryhard', 'master'];
+        const ACHIEVEMENTS = [
+            { id: 'first_clear', name: '初クリア', desc: 'どれか1ステージをクリアする' },
+            { id: 'all_clear', name: '全ステージクリア', desc: 'タイムアタックでステージ9までクリアする' },
+            { id: 'no_miss', name: 'ノーミスクリア', desc: 'タイムアタックで1回も墜落せずにステージ9までクリアする' },
+            { id: 'master_clear', name: 'マスター制覇', desc: 'マスター難易度でステージ9までクリアする' },
+            { id: 'secret_clear', name: '裏ステージ踏破', desc: '裏ステージをクリアする' },
+            { id: 'bonus_20', name: '大連結', desc: 'ボーナスステージで20個以上をひとつにつなぐ' },
+            { id: 'creator', name: 'ステージ職人', desc: 'エディターでステージを保存する' },
+            { id: 'custom_clear', name: '自作ステージ攻略', desc: 'エディターで作ったステージをクリアする' }
+        ];
+        function emptySave() {
+            return { version: SAVE_VERSION, bestTimes: {}, bestScores: {}, cleared: {}, secretUnlocked: false, secretCleared: false, bonusBest: 0, achievements: {} };
+        }
+        // 壊れた・古い・改ざんされたデータでも落ちないよう、型が合う項目だけを拾って作り直す
+        function sanitizeSave(raw) {
+            const s = emptySave();
+            if (!raw || typeof raw !== 'object') return s;
+            const num = v => (typeof v === 'number' && isFinite(v) && v >= 0) ? v : null;
+            if (raw.bestTimes && typeof raw.bestTimes === 'object') Object.entries(raw.bestTimes).forEach(([k, v]) => { if (/^[a-z]+:(\d|SECRET)$/.test(k) && num(v) !== null) s.bestTimes[k] = v; });
+            if (raw.bestScores && typeof raw.bestScores === 'object') DIFF_KEYS.forEach(d => { if (num(raw.bestScores[d]) !== null) s.bestScores[d] = raw.bestScores[d]; });
+            if (raw.cleared && typeof raw.cleared === 'object') Object.keys(raw.cleared).forEach(k => { if (/^(\d|SECRET)$/.test(k)) s.cleared[k] = true; });
+            s.secretUnlocked = raw.secretUnlocked === true;
+            s.secretCleared = raw.secretCleared === true;
+            s.bonusBest = num(raw.bonusBest) || 0;
+            if (raw.achievements && typeof raw.achievements === 'object') ACHIEVEMENTS.forEach(a => { if (num(raw.achievements[a.id]) !== null) s.achievements[a.id] = raw.achievements[a.id]; });
+            return s;
+        }
+        function loadSave() {
+            const text = storageGet(SAVE_KEY);
+            if (!text) return emptySave();
+            try {
+                const raw = JSON.parse(text);
+                if (raw && raw.version > SAVE_VERSION) {
+                    // 新しい版のデータは読めないので、上書きで消さないよう退避してから空で始める
+                    storageSet(SAVE_KEY + '.backup', text);
+                    return emptySave();
+                }
+                return sanitizeSave(raw);
+            } catch (e) {
+                storageSet(SAVE_KEY + '.backup', text);
+                return emptySave();
+            }
+        }
+        let save = loadSave();
+        function persistSave() { storageSet(SAVE_KEY, JSON.stringify(save)); }
+        // ボーナスの自己ベストはセーブデータから引き継ぐ（Ver.2 で永続化に変更）
+        bonusBestScore = Math.max(bonusBestScore, save.bonusBest || 0);
+        function unlock(id) {
+            if (save.achievements[id]) return;
+            save.achievements[id] = Date.now();
+            persistSave();
+            const a = ACHIEVEMENTS.find(x => x.id === id);
+            toast('実績解除: ' + (a ? a.name : id));
+        }
+        let runDeaths = 0;
+        let runScore = 0;
+        onGameEvent((type, d) => {
+            if (demo.active) return; // AUTO DEMO（CPUのプレイ）は自分の記録・実績に入れない
+            if (type === 'runStart') { runDeaths = 0; runScore = 0; }
+            if (type === 'death') runDeaths++;
+            if (type === 'stageClear') {
+                if (d.label === 'CUSTOM') { unlock('custom_clear'); return; }
+                unlock('first_clear');
+                save.cleared[d.label] = true;
+                if (d.mode === 'timeattack' && d.difficulty) {
+                    const key = d.difficulty + ':' + d.label;
+                    const prev = save.bestTimes[key];
+                    if (prev === undefined || d.clearTime < prev) {
+                        save.bestTimes[key] = Math.round(d.clearTime * 100) / 100;
+                        if (prev !== undefined) toast(`自己ベスト更新 ${d.clearTime.toFixed(2)}秒`);
+                    }
+                    if (totalScore > (save.bestScores[d.difficulty] || 0)) save.bestScores[d.difficulty] = totalScore;
+                    if (d.label === '9') {
+                        unlock('all_clear');
+                        if (runDeaths === 0) unlock('no_miss');
+                        if (d.difficulty === 'master') { unlock('master_clear'); save.secretUnlocked = true; }
+                    }
+                }
+                persistSave();
+            }
+            if (type === 'secretClear') { save.secretCleared = true; save.cleared.SECRET = true; persistSave(); unlock('secret_clear'); }
+            if (type === 'bonusEnd') {
+                if (d.score > (save.bonusBest || 0)) { save.bonusBest = d.score; persistSave(); }
+                if (d.score >= 20) unlock('bonus_20');
+            }
+        });
+
+
+        // ---------------------------------------------------------------------
+        // ステージデータの形式チェック（エディター・JSON読み込み・自動生成の共通入口）
+        // validateStageData（配置の危険チェック）の前段で、「そもそも読めるデータか」を見る。
+        // 知らない項目は捨て、範囲外の数値はエラーにする（共有されたJSONをそのまま信用しないため）
+        // ---------------------------------------------------------------------
+        const STAGE_FORMAT = 'comet-gravity-stage';
+        const STAGE_FORMAT_VERSION = 1;
+        const STAGE_LIMITS = { coord: 15, minBlocks: 2, maxBlocks: 40, maxObstacles: 12 };
+        const OBSTACLE_TYPES = ['mars', 'mercury', 'jupiter', 'repulsor'];
+        function normalizeStage(raw) {
+            const errors = [];
+            const out = { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: '', blocks: [], obstacles: [] };
+            if (!raw || typeof raw !== 'object') return { stage: null, errors: ['ステージデータがオブジェクトではない'] };
+            if (raw.version !== undefined && raw.version > STAGE_FORMAT_VERSION) errors.push(`新しい形式(version ${raw.version})のデータは読めない`);
+            out.name = typeof raw.name === 'string' ? raw.name.slice(0, 40) : '';
+            const isNum = v => typeof v === 'number' && isFinite(v);
+            const inRange = (v, lo, hi) => isNum(v) && v >= lo && v <= hi;
+            const vec = (v, what) => {
+                if (!Array.isArray(v) || v.length < 2 || !isNum(v[0]) || !isNum(v[1])) { errors.push(`${what}: 座標が数値の配列ではない`); return null; }
+                if (Math.abs(v[0]) > STAGE_LIMITS.coord || Math.abs(v[1]) > STAGE_LIMITS.coord) errors.push(`${what}: 座標が範囲(±${STAGE_LIMITS.coord})の外`);
+                return [+v[0].toFixed(2), +v[1].toFixed(2), 0];
+            };
+            if (!Array.isArray(raw.blocks)) errors.push('blocks が配列ではない');
+            else {
+                if (raw.blocks.length < STAGE_LIMITS.minBlocks || raw.blocks.length > STAGE_LIMITS.maxBlocks) errors.push(`ブロック数は${STAGE_LIMITS.minBlocks}〜${STAGE_LIMITS.maxBlocks}個（今${raw.blocks.length}個）`);
+                raw.blocks.slice(0, STAGE_LIMITS.maxBlocks).forEach((b, i) => {
+                    const pos = vec(b && b.pos, `ブロック${i}`);
+                    const color = (b && Number.isInteger(b.color) && b.color >= 0 && b.color <= 0xffffff) ? b.color : 0xffffff;
+                    if (pos) out.blocks.push({ pos, color });
+                });
+            }
+            const obs = raw.obstacles === undefined ? [] : raw.obstacles;
+            if (!Array.isArray(obs)) errors.push('obstacles が配列ではない');
+            else {
+                if (obs.length > STAGE_LIMITS.maxObstacles) errors.push(`障害物は${STAGE_LIMITS.maxObstacles}個まで`);
+                obs.slice(0, STAGE_LIMITS.maxObstacles).forEach((o, i) => {
+                    const what = `障害物${i}`;
+                    if (!o || !OBSTACLE_TYPES.includes(o.type)) { errors.push(`${what}: 種類が不明`); return; }
+                    const r = o.radius;
+                    if (!inRange(r, 0.3, 3)) errors.push(`${what}: 半径は0.3〜3`);
+                    if (o.type === 'mercury') {
+                        const c = o.center === undefined ? [0, 0, 0] : vec(o.center, what + 'の中心');
+                        if (!inRange(o.orbitRadius, 1, 13)) errors.push(`${what}: 軌道半径は1〜13`);
+                        if (!inRange(o.speed, -3, 3) || o.speed === 0) errors.push(`${what}: 速さは-3〜3（0以外）`);
+                        out.obstacles.push({ type: 'mercury', center: c || [0, 0, 0], orbitRadius: o.orbitRadius, speed: o.speed, phase: isNum(o.phase) ? o.phase : 0, radius: r });
+                        return;
+                    }
+                    const pos = vec(o.pos, what);
+                    const item = { type: o.type, pos: pos || [0, 0, 0], radius: r };
+                    if (o.type === 'jupiter') {
+                        if (!inRange(o.gravityRange, 1, 12) || o.gravityRange <= r) errors.push(`${what}: 引力圏は半径より大きく12以下`);
+                        item.gravityRange = o.gravityRange;
+                    }
+                    if (o.type === 'repulsor') {
+                        if (!inRange(o.range, 1, 10)) errors.push(`${what}: 反発範囲は1〜10`);
+                        if (!inRange(o.strength, 0.5, 10)) errors.push(`${what}: 反発の強さは0.5〜10`);
+                        item.range = o.range; item.strength = o.strength;
+                    }
+                    out.obstacles.push(item);
+                });
+            }
+            return { stage: errors.length ? null : out, draft: out, errors };
+        }
+
+        // ---------------------------------------------------------------------
+        // 反発フィールド（新ギミックの試作1種目）
+        // 範囲の中心ほど強く、外向きに押し返す。触れても墜落しない。木星の逆で「近づけない場所」を作る
+        // 強さは範囲の端で0になるよう線形に落とす（木星で問題になった「境界で急に切れる」を最初から避ける）
+        // ---------------------------------------------------------------------
+        physicsHooks.push(dt => {
+            if (!gameStarted || docked || bonusActive) return;
+            const reps = obstacles.filter(o => o.data.type === 'repulsor');
+            if (!reps.length) return;
+            blocks.forEach(b => {
+                if (b === dragging || dragGroup.includes(b) || b.body.mass === 0) return; // 手で持っている間は押さない
+                reps.forEach(o => {
+                    const range = o.data.range || 4, strength = o.data.strength || 4;
+                    const dx = b.body.position.x - o.mesh.position.x, dy = b.body.position.y - o.mesh.position.y;
+                    const dist = Math.hypot(dx, dy);
+                    if (dist >= range || dist < 0.001) return;
+                    const accel = strength * (1 - dist / range);
+                    b.body.velocity.x += dx / dist * accel * dt;
+                    b.body.velocity.y += dy / dist * accel * dt;
+                });
+            });
+        });
+
+        // ---------------------------------------------------------------------
+        // ステージの見た目だけを作る（物理なし）。エディター・リプレイ・ゴーストで共有する
+        // ---------------------------------------------------------------------
+        const PREVIEW_BOX = new THREE.BoxGeometry(1, 1, 1);
+        PREVIEW_BOX.userData = {};
+        function makePreviewBlock(color, opacity) {
+            const mat = new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.3, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 });
+            const m = new THREE.Mesh(PREVIEW_BOX, mat);
+            m.userData.sharedGeometry = true;
+            return m;
+        }
+        function disposePreview(group) {
+            if (!group) return;
+            scene.remove(group);
+            group.traverse(o => {
+                if (o.geometry && o.geometry !== PREVIEW_BOX) o.geometry.dispose();
+                if (o.material) o.material.dispose();
+            });
+        }
+        function circleLine(radius, color, opacity) {
+            const pts = [];
+            for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius, 0)); }
+            return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+        }
+        const OBSTACLE_PREVIEW_COLOR = { mars: 0xcc4422, mercury: 0x999988, jupiter: 0xddaa55, repulsor: 0x33bbff };
+        function mercuryPos(o, t) {
+            const a = t * (o.speed || 0.8) + (o.phase || 0);
+            return [o.center[0] + Math.cos(a) * o.orbitRadius, o.center[1] + Math.sin(a) * o.orbitRadius];
+        }
+        // 戻り値: { group, blockMeshes[], obstacleMeshes[] }
+        function buildPreview(stage, opts) {
+            opts = opts || {};
+            const group = new THREE.Group();
+            const blockMeshes = (stage.blocks || []).map(b => {
+                const m = makePreviewBlock(b.color, opts.blockOpacity === undefined ? 1 : opts.blockOpacity);
+                m.position.set(b.pos[0], b.pos[1], 0);
+                group.add(m);
+                return m;
+            });
+            const obstacleMeshes = [];
+            if (!opts.blocksOnly) (stage.obstacles || []).forEach(o => {
+                const color = OBSTACLE_PREVIEW_COLOR[o.type];
+                const m = new THREE.Mesh(new THREE.SphereGeometry(o.radius, 20, 20), new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.35 }));
+                const g = new THREE.Group();
+                g.add(m);
+                // 墜落する範囲（本体＋当たり判定の余白）を赤い輪で示す。反発フィールドは死なないので出さない
+                if (o.type !== 'repulsor') g.add(circleLine(o.radius + OBSTACLE_HIT_MARGIN, 0xff3322, 0.5));
+                if (o.type === 'jupiter') g.add(circleLine(o.gravityRange, 0xffcc88, 0.35));
+                if (o.type === 'repulsor') g.add(circleLine(o.range, 0x66ddff, 0.5));
+                if (o.type === 'mercury') {
+                    const orbit = circleLine(o.orbitRadius, 0x999988, 0.3);
+                    orbit.position.set(o.center[0], o.center[1], 0);
+                    group.add(orbit);
+                    const p = mercuryPos(o, 0); g.position.set(p[0], p[1], 0);
+                } else g.position.set(o.pos[0], o.pos[1], 0);
+                group.add(g);
+                obstacleMeshes.push(g);
+            });
+            scene.add(group);
+            return { group, blockMeshes, obstacleMeshes };
+        }
+
+        // ---------------------------------------------------------------------
+        // ステージ自動生成（Phase 6 の試作）
+        // 生成と検証を分けている：ここで作った候補を validateStageData に通し、「操作しなくても死ぬ配置」が
+        // 無くなるまで作り直す。ただし「実際にクリアできるか」はこの検証では保証できない（別問題）
+        // ---------------------------------------------------------------------
+        const BLOCK_PALETTE = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff, 0xff8800, 0x8800ff, 0x88ff00, 0xff0088];
+        function generateStage(params) {
+            const p = Object.assign({ blocks: 7, obstacles: 2, jupiter: true, repulsor: false }, params || {});
+            const rnd = (a, b) => a + Math.random() * (b - a);
+            for (let attempt = 0; attempt < 300; attempt++) {
+                const stage = { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: 'RANDOM', blocks: [], obstacles: [] };
+                const kinds = ['mars', 'mercury'];
+                if (p.jupiter) kinds.push('jupiter');
+                if (p.repulsor) kinds.push('repulsor');
+                for (let i = 0; i < p.obstacles; i++) {
+                    const type = kinds[Math.floor(Math.random() * kinds.length)];
+                    const ang = rnd(0, Math.PI * 2), dist = rnd(4.5, 8);
+                    const pos = [+(Math.cos(ang) * dist).toFixed(1), +(Math.sin(ang) * dist * 0.75).toFixed(1), 0];
+                    if (type === 'mars') stage.obstacles.push({ type, pos, radius: +rnd(0.9, 1.3).toFixed(1) });
+                    if (type === 'mercury') stage.obstacles.push({ type, center: [0, 0, 0], orbitRadius: +rnd(4.5, 7).toFixed(1), speed: +(rnd(0.6, 1.1) * (Math.random() < 0.5 ? -1 : 1)).toFixed(2), phase: +rnd(0, 6.28).toFixed(2), radius: 0.7 });
+                    if (type === 'jupiter') stage.obstacles.push({ type, pos: [+(Math.cos(ang) * 7).toFixed(1), +(Math.sin(ang) * 5.5).toFixed(1), 0], radius: 1.3, gravityRange: 5 });
+                    if (type === 'repulsor') stage.obstacles.push({ type, pos, radius: 0.6, range: 3, strength: 4 });
+                }
+                for (let i = 0; i < p.blocks; i++) {
+                    const ang = i / p.blocks * Math.PI * 2 + rnd(-0.2, 0.2), dist = rnd(7.5, 10.5);
+                    stage.blocks.push({ pos: [+(Math.cos(ang) * dist).toFixed(1), +(Math.sin(ang) * dist * 0.8).toFixed(1), 0], color: BLOCK_PALETTE[i % BLOCK_PALETTE.length] });
+                }
+                const norm = normalizeStage(stage);
+                if (!norm.stage) continue;
+                const issues = validateStageData(norm.stage, 'RANDOM');
+                // 致命に加えて「反発がゴールに届く」も捨てる（押し返されてドッキングできない恐れがあるため、自動では作らない）
+                if (issues.some(x => x.level === '致命' || x.rule === 'ゴールに反発が届く')) continue;
+                // ブロック同士が最初からくっついていたら作り直す（1.5未満で自動連結される）
+                const bs = norm.stage.blocks;
+                let tooClose = false;
+                for (let i = 0; i < bs.length && !tooClose; i++) for (let j = i + 1; j < bs.length; j++) if (Math.hypot(bs[i].pos[0] - bs[j].pos[0], bs[i].pos[1] - bs[j].pos[1]) < 2) { tooClose = true; break; }
+                if (tooClose) continue;
+                norm.stage.name = 'RANDOM-' + Math.floor(Math.random() * 9000 + 1000);
+                return { stage: norm.stage, attempts: attempt + 1 };
+            }
+            return null;
+        }
+
+
+        // ---------------------------------------------------------------------
+        // ステージエディター（Phase 2）
+        // 操作: 左クリック=置く／選ぶ・ドラッグで動かす　右クリック=消す
+        // ---------------------------------------------------------------------
+        const CUSTOM_KEY = 'cometGravity.customStages';
+        function loadCustomStages() {
+            try {
+                const raw = JSON.parse(storageGet(CUSTOM_KEY) || '{}');
+                const out = {};
+                Object.entries(raw && raw.stages || {}).forEach(([name, st]) => { const n = normalizeStage(st); if (n.stage) out[name.slice(0, 40)] = n.stage; });
+                return out;
+            } catch (e) { return {}; }
+        }
+        function saveCustomStages(map) { return storageSet(CUSTOM_KEY, JSON.stringify({ version: 1, stages: map })); }
+        const editor = {
+            active: false, stage: null, tool: 'block', selected: null, preview: null, panel: null, draggingItem: null,
+            colorIndex: 3, testDifficulty: 'easy', savedCamera: null
+        };
+        const EDITOR_TOOLS = [
+            ['block', 'ブロック'], ['mars', '火星'], ['mercury', '水星'], ['jupiter', '木星'], ['repulsor', '反発'], ['select', '選択']
+        ];
+        function newEditorStage() {
+            return { format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: 'MY STAGE', blocks: [
+                { pos: [-7, 5, 0], color: 0xff0000 }, { pos: [7, 5, 0], color: 0x00ff00 }, { pos: [0, -7, 0], color: 0x0000ff }
+            ], obstacles: [] };
+        }
+        function hideAllMenus() {
+            ['title-screen', 'mode-screen', 'difficulty-screen', 'controls-screen'].forEach(id => { document.getElementById(id).style.display = 'none'; });
+        }
+        function openEditor(stage) {
+            hideAllMenus();
+            clearBoard();
+            gameStarted = false;
+            docked = false;
+            inputLocked = true;
+            editor.active = true;
+            editor.stage = stage ? JSON.parse(JSON.stringify(stage)) : (editor.stage || newEditorStage());
+            editor.selected = null;
+            // 真上から見た固定視点にする（置いた位置とゲーム中の位置を一致させるため）。
+            // 左のパネル（幅300px）に盤面の左端が隠れないよう、視点を少し左へずらして盤面を右に寄せる
+            camera.position.set(-2.5, 0, 16); camera.lookAt(-2.5, 0, 0);
+            if (controls) { controls.target.set(-2.5, 0, 0); controls.enabled = false; controls.update(); }
+            anchor.visible = true;
+            buildEditorPanel();
+            refreshEditor();
+        }
+        function closeEditor() {
+            editor.active = false;
+            disposePreview(editor.preview && editor.preview.group);
+            editor.preview = null;
+            if (editor.panel) { editor.panel.remove(); editor.panel = null; }
+            camera.position.set(0, 0, 15); camera.lookAt(0, 0, 0); // ゲーム本来の初期視点に戻す
+            if (controls) { controls.target.set(0, 0, 0); controls.enabled = true; controls.update(); }
+            inputLocked = false;
+        }
+        function editorPoint(e) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            const m = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+            const rc = new THREE.Raycaster();
+            rc.setFromCamera(m, camera);
+            const p = new THREE.Vector3();
+            rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), p);
+            return [Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10];
+        }
+        function itemPos(item) {
+            if (item.kind === 'block') return editor.stage.blocks[item.index].pos;
+            const o = editor.stage.obstacles[item.index];
+            return o.type === 'mercury' ? mercuryPos(o, 0) : o.pos;
+        }
+        function hitTest(pt) {
+            let best = null, bestD = Infinity;
+            editor.stage.blocks.forEach((b, i) => { const d = Math.hypot(b.pos[0] - pt[0], b.pos[1] - pt[1]); if (d < 0.8 && d < bestD) { best = { kind: 'block', index: i }; bestD = d; } });
+            editor.stage.obstacles.forEach((o, i) => { const p = itemPos({ kind: 'obstacle', index: i }); const d = Math.hypot(p[0] - pt[0], p[1] - pt[1]); if (d < o.radius + 0.3 && d < bestD) { best = { kind: 'obstacle', index: i }; bestD = d; } });
+            return best;
+        }
+        function addItem(pt) {
+            const t = editor.tool;
+            if (t === 'block') {
+                if (editor.stage.blocks.length >= STAGE_LIMITS.maxBlocks) { toast(`ブロックは${STAGE_LIMITS.maxBlocks}個まで`); return null; }
+                editor.stage.blocks.push({ pos: [pt[0], pt[1], 0], color: BLOCK_PALETTE[editor.colorIndex++ % BLOCK_PALETTE.length] });
+                return { kind: 'block', index: editor.stage.blocks.length - 1 };
+            }
+            if (editor.stage.obstacles.length >= STAGE_LIMITS.maxObstacles) { toast(`障害物は${STAGE_LIMITS.maxObstacles}個まで`); return null; }
+            let o;
+            if (t === 'mars') o = { type: 'mars', pos: [pt[0], pt[1], 0], radius: 1.2 };
+            if (t === 'jupiter') o = { type: 'jupiter', pos: [pt[0], pt[1], 0], radius: 1.4, gravityRange: 5 };
+            if (t === 'repulsor') o = { type: 'repulsor', pos: [pt[0], pt[1], 0], radius: 0.6, range: 3, strength: 4 };
+            if (t === 'mercury') o = { type: 'mercury', center: [0, 0, 0], orbitRadius: Math.max(1, +Math.hypot(pt[0], pt[1]).toFixed(1)), speed: 0.8, phase: +Math.atan2(pt[1], pt[0]).toFixed(2), radius: 0.8 };
+            if (!o) return null;
+            editor.stage.obstacles.push(o);
+            return { kind: 'obstacle', index: editor.stage.obstacles.length - 1 };
+        }
+        function moveItem(item, pt) {
+            if (item.kind === 'block') { editor.stage.blocks[item.index].pos = [pt[0], pt[1], 0]; return; }
+            const o = editor.stage.obstacles[item.index];
+            if (o.type === 'mercury') {
+                // 水星は「軌道上の位置」をつかんで動かす：中心からの距離＝軌道半径、角度＝開始位置
+                o.orbitRadius = Math.max(1, +Math.hypot(pt[0] - o.center[0], pt[1] - o.center[1]).toFixed(1));
+                o.phase = +Math.atan2(pt[1] - o.center[1], pt[0] - o.center[0]).toFixed(2);
+            } else o.pos = [pt[0], pt[1], 0];
+        }
+        function deleteItem(item) {
+            if (item.kind === 'block') editor.stage.blocks.splice(item.index, 1);
+            else editor.stage.obstacles.splice(item.index, 1);
+            editor.selected = null;
+        }
+        renderer.domElement.addEventListener('pointerdown', e => {
+            if (!editor.active) return;
+            const pt = editorPoint(e);
+            const hit = hitTest(pt);
+            if (e.button === 2) { if (hit) { deleteItem(hit); refreshEditor(); } return; }
+            if (e.button !== 0) return;
+            if (hit) editor.selected = hit;
+            else if (editor.tool !== 'select') editor.selected = addItem(pt);
+            else editor.selected = null;
+            editor.draggingItem = editor.selected;
+            refreshEditor();
+        });
+        renderer.domElement.addEventListener('pointermove', e => {
+            if (!editor.active || !editor.draggingItem) return;
+            moveItem(editor.draggingItem, editorPoint(e));
+            refreshEditor(true);
+        });
+        window.addEventListener('pointerup', () => { if (editor.draggingItem) { editor.draggingItem = null; refreshEditor(); } });
+        function editorInput(label, value, step, onChange) {
+            const inp = el('input', { type: 'number', step: String(step), value: String(value) });
+            inp.addEventListener('change', () => { const v = parseFloat(inp.value); if (isFinite(v)) { onChange(v); refreshEditor(); } });
+            return el('div', { class: 'cg-row' }, [el('label', { text: label }), inp]);
+        }
+        function buildEditorPanel() {
+            if (editor.panel) editor.panel.remove();
+            const p = el('div', { class: 'cg-panel', id: 'editor-panel', style: 'top: 0; left: 0; width: 300px; height: 100vh; overflow-y: auto; padding: 14px;' });
+            editor.panel = p;
+            document.body.appendChild(p);
+        }
+        // 中身はステージが変わるたびに作り直す（項目数が少ないので差分更新より単純さを優先）
+        function refreshEditor(previewOnly) {
+            if (!editor.active) return;
+            disposePreview(editor.preview && editor.preview.group);
+            editor.preview = buildPreview(editor.stage);
+            if (editor.selected) {
+                const list = editor.selected.kind === 'block' ? editor.preview.blockMeshes : editor.preview.obstacleMeshes;
+                const m = list[editor.selected.index];
+                if (m) { const ring = circleLine(editor.selected.kind === 'block' ? 0.9 : editor.stage.obstacles[editor.selected.index].radius + 0.25, 0xffffff, 0.9); ring.position.copy(m.position); ring.position.z = 0.6; editor.preview.group.add(ring); }
+            }
+            if (previewOnly) return;
+            const p = editor.panel;
+            p.textContent = '';
+            p.appendChild(el('h3', { text: 'STAGE EDITOR' }));
+            const nameInp = el('input', { type: 'text', value: editor.stage.name || '', maxlength: '40' });
+            nameInp.addEventListener('change', () => { editor.stage.name = nameInp.value.slice(0, 40); });
+            p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: '名前' }), nameInp]));
+            p.appendChild(el('h4', { text: '置くもの（左クリック）' }));
+            p.appendChild(el('div', {}, EDITOR_TOOLS.map(([id, name]) => el('button', { class: 'cg-btn' + (editor.tool === id ? ' on' : ''), text: name, onclick: () => { editor.tool = id; refreshEditor(); } }))));
+            p.appendChild(el('div', { class: 'cg-hint', text: '空いている所をクリックで追加、物をクリックで選択、ドラッグで移動、右クリックで削除。水星は軌道上の位置をドラッグすると軌道半径と開始位置が変わる。' }));
+            // 選択中の項目のパラメータ
+            const sel = editor.selected;
+            if (sel) {
+                p.appendChild(el('h4', { text: '選択中' }));
+                if (sel.kind === 'block') {
+                    const b = editor.stage.blocks[sel.index];
+                    p.appendChild(el('div', { class: 'cg-hint', text: `ブロック ${sel.index + 1}` }));
+                    p.appendChild(editorInput('x', b.pos[0], 0.1, v => { b.pos[0] = v; }));
+                    p.appendChild(editorInput('y', b.pos[1], 0.1, v => { b.pos[1] = v; }));
+                    p.appendChild(el('button', { class: 'cg-btn', text: '色を変える', onclick: () => { b.color = BLOCK_PALETTE[(BLOCK_PALETTE.indexOf(b.color) + 1) % BLOCK_PALETTE.length]; refreshEditor(); } }));
+                } else {
+                    const o = editor.stage.obstacles[sel.index];
+                    const names = { mars: '火星（固定・触れ続けると墜落）', mercury: '水星（周回・触れ続けると墜落）', jupiter: '木星（引力・本体で墜落）', repulsor: '反発フィールド（押し返す・墜落しない）' };
+                    p.appendChild(el('div', { class: 'cg-hint', text: names[o.type] }));
+                    if (o.type === 'mercury') {
+                        p.appendChild(editorInput('軌道半径', o.orbitRadius, 0.1, v => { o.orbitRadius = v; }));
+                        p.appendChild(editorInput('速さ', o.speed, 0.1, v => { o.speed = v; }));
+                        p.appendChild(editorInput('開始角度', o.phase, 0.1, v => { o.phase = v; }));
+                    } else {
+                        p.appendChild(editorInput('x', o.pos[0], 0.1, v => { o.pos[0] = v; }));
+                        p.appendChild(editorInput('y', o.pos[1], 0.1, v => { o.pos[1] = v; }));
+                    }
+                    p.appendChild(editorInput('半径', o.radius, 0.1, v => { o.radius = v; }));
+                    if (o.type === 'jupiter') p.appendChild(editorInput('引力圏', o.gravityRange, 0.5, v => { o.gravityRange = v; }));
+                    if (o.type === 'repulsor') {
+                        p.appendChild(editorInput('反発範囲', o.range, 0.5, v => { o.range = v; }));
+                        p.appendChild(editorInput('反発の強さ', o.strength, 0.5, v => { o.strength = v; }));
+                    }
+                }
+                p.appendChild(el('button', { class: 'cg-btn warn', text: '削除', onclick: () => { deleteItem(sel); refreshEditor(); } }));
+            }
+            // 検証結果
+            p.appendChild(el('h4', { text: `検証（ブロック${editor.stage.blocks.length} / 障害物${editor.stage.obstacles.length}）` }));
+            const norm = normalizeStage(editor.stage);
+            const issuesBox = el('div', { class: 'cg-issues' });
+            norm.errors.forEach(t => issuesBox.appendChild(el('div', { class: 'cg-fatal', text: '× ' + t })));
+            if (norm.stage) {
+                const issues = validateStageData(norm.stage, 'EDIT');
+                issues.forEach(x => issuesBox.appendChild(el('div', { class: x.level === '致命' ? 'cg-fatal' : 'cg-warn', text: `${x.level === '致命' ? '×' : '!'} ${x.rule}: ${x.detail}` })));
+                if (!issues.length) issuesBox.appendChild(el('div', { class: 'cg-ok', text: '○ 危険な初期配置は見つからない' }));
+            }
+            p.appendChild(issuesBox);
+            p.appendChild(el('div', { class: 'cg-hint', text: '※ 検証は「何もしなくても墜落する配置」を探すもので、クリアできることまでは保証しない。最後は必ずテストプレイで確かめる。' }));
+            // テストプレイ
+            p.appendChild(el('h4', { text: 'テストプレイ' }));
+            const diffSel = el('select', {}, DIFF_KEYS.map(k => { const o = el('option', { value: k, text: DIFFICULTY_SETTINGS[k].label }); if (k === editor.testDifficulty) o.selected = true; return o; }));
+            diffSel.addEventListener('change', () => { editor.testDifficulty = diffSel.value; });
+            p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: '難易度' }), diffSel]));
+            const playable = !!norm.stage;
+            p.appendChild(el('div', {}, [
+                el('button', { class: 'cg-btn', text: 'チュートリアルで試す', onclick: () => startCustomTest('idle') }),
+                el('button', { class: 'cg-btn', text: 'タイムアタックで試す', onclick: () => startCustomTest('timeattack') })
+            ]));
+            if (!playable) Array.from(p.querySelectorAll('button')).slice(-2).forEach(b => { b.disabled = true; });
+            // 保存・読み込み
+            p.appendChild(el('h4', { text: '保存・共有' }));
+            const saved = loadCustomStages();
+            const loadSel = el('select', {}, [el('option', { value: '', text: '（保存済みステージ）' })].concat(Object.keys(saved).map(n => el('option', { value: n, text: n }))));
+            p.appendChild(el('div', {}, [
+                el('button', { class: 'cg-btn', text: 'ブラウザに保存', onclick: () => {
+                    const n = normalizeStage(editor.stage);
+                    if (!n.stage) { toast('エラーがあるので保存できない'); return; }
+                    const map = loadCustomStages();
+                    map[n.stage.name || 'NO NAME'] = n.stage;
+                    if (saveCustomStages(map)) { toast('保存した: ' + (n.stage.name || 'NO NAME')); unlock('creator'); refreshEditor(); }
+                    else toast('保存できなかった（ブラウザの保存領域が使えない）');
+                } }),
+                el('button', { class: 'cg-btn', text: 'JSON書き出し', onclick: () => exportStageJSON() }),
+                el('button', { class: 'cg-btn', text: 'JSON読み込み', onclick: () => importStageJSON() })
+            ]));
+            p.appendChild(el('div', { class: 'cg-row' }, [loadSel,
+                el('button', { class: 'cg-btn', text: '開く', onclick: () => { if (saved[loadSel.value]) { editor.stage = JSON.parse(JSON.stringify(saved[loadSel.value])); editor.selected = null; refreshEditor(); } } }),
+                el('button', { class: 'cg-btn warn', text: '削除', onclick: () => { if (!loadSel.value) return; const map = loadCustomStages(); delete map[loadSel.value]; saveCustomStages(map); refreshEditor(); } })
+            ]));
+            // 新規・自動生成・本編の読み込み
+            p.appendChild(el('h4', { text: '作り始める' }));
+            const baseSel = el('select', {}, stages.map((s, i) => el('option', { value: String(i), text: `ステージ${i + 1}を元にする` })));
+            p.appendChild(el('div', {}, [
+                el('button', { class: 'cg-btn', text: '新規', onclick: () => { editor.stage = newEditorStage(); editor.selected = null; refreshEditor(); } }),
+                el('button', { class: 'cg-btn', text: 'ランダム生成', onclick: () => {
+                    const g = generateStage({ blocks: 5 + Math.floor(Math.random() * 5), obstacles: 1 + Math.floor(Math.random() * 3), jupiter: true, repulsor: true });
+                    if (!g) { toast('条件に合う配置が作れなかった'); return; }
+                    editor.stage = g.stage; editor.selected = null; refreshEditor(); toast(`生成した（${g.attempts}回目で検証を通過）`);
+                } })
+            ]));
+            p.appendChild(el('div', { class: 'cg-row' }, [baseSel, el('button', { class: 'cg-btn', text: '読む', onclick: () => {
+                const src = stages[+baseSel.value];
+                const n = normalizeStage(Object.assign({ name: `STAGE${+baseSel.value + 1} EDIT` }, JSON.parse(JSON.stringify(src))));
+                editor.stage = n.draft; editor.selected = null; refreshEditor();
+            } })]));
+            p.appendChild(el('h4', { text: '' }));
+            p.appendChild(el('button', { class: 'cg-btn warn', text: 'エディターを終わる', onclick: () => { closeEditor(); returnToTitle(); } }));
+        }
+        function exportStageJSON() {
+            const n = normalizeStage(editor.stage);
+            if (!n.stage) { toast('エラーがあるので書き出せない'); return; }
+            const blob = new Blob([JSON.stringify(n.stage, null, 2)], { type: 'application/json' });
+            const a = el('a', { href: URL.createObjectURL(blob), download: (n.stage.name || 'stage').replace(/[^\w\-]+/g, '_') + '.json' });
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        }
+        function importStageJSON() {
+            const inp = el('input', { type: 'file', accept: '.json,application/json' });
+            inp.addEventListener('change', () => {
+                const f = inp.files[0];
+                if (!f) return;
+                if (f.size > 200000) { toast('ファイルが大きすぎる（200KBまで）'); return; }
+                f.text().then(text => {
+                    let raw;
+                    try { raw = JSON.parse(text); } catch (e) { toast('JSONとして読めない'); return; }
+                    const n = normalizeStage(raw);
+                    if (!n.stage) { toast('読み込めない: ' + n.errors[0]); return; }
+                    editor.stage = n.stage; editor.selected = null; refreshEditor(); toast('読み込んだ: ' + n.stage.name);
+                });
+            });
+            inp.click();
+        }
+        // エディターの中身をそのまま本番の仕組み（loadStageData・物理・即死判定）で遊ぶ
+        const editorReturnBtn = el('button', { class: 'cg-hud-btn', id: 'editor-return-button', text: 'EDITOR', style: 'right: 440px;' });
+        document.body.appendChild(editorReturnBtn);
+        editorReturnBtn.addEventListener('click', () => { const st = editor.stage; returnToTitle(); openEditor(st); });
+        function startCustomTest(mode) {
+            const n = normalizeStage(editor.stage);
+            if (!n.stage) return;
+            const stage = n.stage;
+            closeEditor();
+            gameMode = mode;
+            currentDifficulty = mode === 'timeattack' ? editor.testDifficulty : null;
+            startGame();
+            customStageActive = true;
+            customStageData = stage;
+            loadStageData(stage, 'CUSTOM');
+            editorReturnBtn.style.display = 'block';
+        }
+        onGameEvent((type, d) => {
+            if (type === 'title') editorReturnBtn.style.display = 'none';
+            if (type === 'stageClear' && d.label === 'CUSTOM') later(() => toast(`クリア！ ${d.clearTime.toFixed(2)}秒　EDITORで編集に戻れる`), 800);
+        });
+        document.getElementById('mode-editor-button').addEventListener('click', () => openEditor());
+
+
+        // ---------------------------------------------------------------------
+        // リプレイと記録型ゴースト（Phase 3 / C1）
+        // 方式：「操作入力だけを記録して再シミュレーション」ではなく「ブロックの位置を一定間隔で記録」にした。
+        // 入力だけの方式はデータが小さいが、物理演算の誤差・タイマー（Date.now）基準の水星・ランダムな初速が絡むため
+        // 同じ結果を再現できる保証がない。位置記録なら必ず同じ映像になる（代わりにデータが大きいので間引いて圧縮する）
+        // ---------------------------------------------------------------------
+        const REPLAY_KEY = 'cometGravity.replays';
+        const REPLAY_HZ = 10;               // 1秒あたりの記録回数（再生時は間を補間する）
+        const REPLAY_MAX_BYTES = 1500000;   // localStorage の容量（多くのブラウザで5MB）を食い尽くさないための上限
+        let recording = null;
+        let lastReplay = null;              // 直前のプレイ（保存しなくても記録画面から見られる）
+        function stageDataForLabel(label) {
+            if (label === 'CUSTOM') return customStageData;
+            if (label === 'SECRET') return secretStageData;
+            return stages[+label - 1];
+        }
+        function replayKeyOf(r) { return `${r.mode}:${r.difficulty || '-'}:${r.label}${r.label === 'CUSTOM' ? ':' + (r.stage.name || '') : ''}`; }
+        function loadReplays() {
+            try { const raw = JSON.parse(storageGet(REPLAY_KEY) || '{}'); return (raw && typeof raw.items === 'object') ? raw.items : {}; } catch (e) { return {}; }
+        }
+        function saveReplays(items) {
+            // 上限を超えたら古いものから捨てる
+            let text = JSON.stringify({ version: 1, items });
+            const keys = Object.keys(items).sort((a, b) => (items[a].savedAt || 0) - (items[b].savedAt || 0));
+            while (text.length > REPLAY_MAX_BYTES && keys.length) { delete items[keys.shift()]; text = JSON.stringify({ version: 1, items }); }
+            return storageSet(REPLAY_KEY, text);
+        }
+        function startRecording() {
+            const label = currentStageLabel();
+            const stage = stageDataForLabel(label);
+            if (!stage || bonusActive) { recording = null; return; }
+            recording = { version: 1, label, mode: gameMode, difficulty: currentDifficulty, stage: JSON.parse(JSON.stringify(stage)), colors: blocks.map(b => b.mesh.material.color.getHex()), frames: [], links: [], nextT: 0, linkCount: 0 };
+        }
+        // ステージが読み込まれるたびに録画を始め直す。読み込みのたびにブロックは作り直されるので、
+        // 先頭ブロックのオブジェクトが入れ替わったことで「読み込まれた」と判断する。
+        // （gameStarted は RETRY で true のまま読み直されることがあり、stageStartTime はタブ復帰の補正でも動くので使えない）
+        let recStageKey = null;
+        frameHooks.push(() => {
+            const playing = gameStarted && !bonusActive && !editor.active && !replayPlayer.active;
+            if (!playing) { recStageKey = null; return; }
+            if (recStageKey !== blocks[0]) { recStageKey = blocks[0]; startRecording(); }
+            if (!recording || docked) return;
+            const t = (Date.now() - stageStartTime) / 1000;
+            if (blocks.length !== recording.colors.length) { recording = null; return; }
+            // 連結が増えたら「いつ・どれとどれが」を記録（再生時に線を引くため）
+            if (connectionLines.length > recording.linkCount) {
+                for (let i = recording.linkCount; i < connectionLines.length; i++) {
+                    const c = connectionLines[i];
+                    recording.links.push([+t.toFixed(2), blocks.indexOf(c.blockA), blocks.indexOf(c.blockB)]);
+                }
+                recording.linkCount = connectionLines.length;
+            }
+            if (t < recording.nextT) return;
+            recording.nextT = t + 1 / REPLAY_HZ;
+            const f = [+t.toFixed(2)];
+            blocks.forEach(b => { f.push(Math.round(b.body.position.x * 100) / 100, Math.round(b.body.position.y * 100) / 100); });
+            recording.frames.push(f);
+        });
+        onGameEvent((type, d) => {
+            if (type === 'death' || type === 'title') recording = null;
+            if (type === 'stageClear' && recording && demo.active) recording = null; // デモのプレイは自己ベストにしない
+            if (type === 'stageClear' && recording) {
+                const t = d.clearTime;
+                // クリアと同じフレームでできた連結は録画フックより先にクリア判定が走るので、ここで拾う
+                for (let i = recording.linkCount; i < connectionLines.length; i++) {
+                    recording.links.push([+t.toFixed(2), blocks.indexOf(connectionLines[i].blockA), blocks.indexOf(connectionLines[i].blockB)]);
+                }
+                const f = [+t.toFixed(2)];
+                blocks.forEach(b => { f.push(Math.round(b.body.position.x * 100) / 100, Math.round(b.body.position.y * 100) / 100); });
+                recording.frames.push(f);
+                const r = { version: 1, label: recording.label, mode: recording.mode, difficulty: recording.difficulty, stage: recording.stage, colors: recording.colors, frames: recording.frames, links: recording.links, clearTime: +t.toFixed(2), savedAt: Date.now() };
+                lastReplay = r;
+                recording = null;
+                // 自己ベストならそのまま保存（ゴーストの元になる）
+                const items = loadReplays();
+                const key = replayKeyOf(r);
+                if (!items[key] || r.clearTime < items[key].clearTime) { items[key] = r; saveReplays(items); }
+            }
+        });
+        // 時刻 t のブロック位置を記録から補間して取り出す
+        function replaySample(r, t) {
+            const fr = r.frames;
+            if (!fr.length) return null;
+            let lo = 0, hi = fr.length - 1;
+            if (t <= fr[0][0]) return fr[0].slice(1);
+            if (t >= fr[hi][0]) return fr[hi].slice(1);
+            while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (fr[mid][0] <= t) lo = mid; else hi = mid; }
+            const a = fr[lo], b = fr[hi], k = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
+            return a.slice(1).map((v, i) => v + (b[i + 1] - v) * k);
+        }
+
+        // --- 記録型ゴースト：タイムアタック中、同じステージの自己ベストを半透明で重ねる ---
+        let ghostEnabled = true;
+        const ghost = { preview: null, replay: null };
+        const ghostBtn = el('button', { class: 'cg-hud-btn', id: 'ghost-button', text: 'GHOST: ON', style: 'right: 440px;' });
+        const bestLabel = el('div', { id: 'best-time-display', style: 'position: fixed; top: 98px; right: 20px; font-family: monospace; font-size: 12px; color: #aaccff; letter-spacing: 2px; z-index: 50; display: none;' });
+        document.body.appendChild(ghostBtn); document.body.appendChild(bestLabel);
+        ghostBtn.addEventListener('click', () => { ghostEnabled = !ghostEnabled; ghostBtn.textContent = ghostEnabled ? 'GHOST: ON' : 'GHOST: OFF'; clearGhost(); ghostStageStart = null; /* 次のフレームで、ONなら今のステージ用に作り直す */ });
+        function clearGhost() { disposePreview(ghost.preview && ghost.preview.group); ghost.preview = null; ghost.replay = null; }
+        let ghostStageStart = 0;
+        frameHooks.push(() => {
+            const ta = gameMode === 'timeattack' && gameStarted && !bonusActive && !customStageActive && !editor.active && !replayPlayer.active && !demo.active;
+            ghostBtn.style.display = ta ? 'block' : 'none';
+            if (!ta) { bestLabel.style.display = 'none'; ghostStageStart = null; if (ghost.preview) clearGhost(); return; }
+            // ステージが読み込まれたら（先頭ブロックが作り直されたら）ゴーストを作り直す
+            if (ghostStageStart !== blocks[0]) {
+                ghostStageStart = blocks[0];
+                clearGhost();
+                const key = `timeattack:${currentDifficulty}:${currentStageLabel()}`;
+                const best = save.bestTimes[`${currentDifficulty}:${currentStageLabel()}`];
+                bestLabel.textContent = best !== undefined ? `BEST ${best.toFixed(2)}s` : 'BEST --';
+                const r = loadReplays()[key];
+                if (ghostEnabled && r && r.colors.length === blocks.length) {
+                    ghost.replay = r;
+                    ghost.preview = buildPreview({ blocks: r.colors.map((c, i) => ({ pos: [r.frames[0][1 + i * 2], r.frames[0][2 + i * 2], 0], color: c })) }, { blocksOnly: true, blockOpacity: 0.22 });
+                }
+            }
+            bestLabel.style.display = 'block';
+            if (ghost.preview && !docked) {
+                const pos = replaySample(ghost.replay, (Date.now() - stageStartTime) / 1000);
+                ghost.preview.blockMeshes.forEach((m, i) => m.position.set(pos[i * 2], pos[i * 2 + 1], -0.05));
+            }
+        });
+
+        // --- リプレイ再生 ---
+        const replayPlayer = { active: false, r: null, t: 0, speed: 1, paused: false, preview: null, lines: [], ui: null, startAt: 0 };
+        function playReplay(r) {
+            hideAllMenus();
+            closeRecords();
+            clearBoard();
+            gameStarted = false; docked = false; inputLocked = true;
+            replayPlayer.active = true; replayPlayer.r = r; replayPlayer.t = 0; replayPlayer.speed = 1; replayPlayer.paused = false;
+            camera.position.set(0, 0, 15); camera.lookAt(0, 0, 0);
+            if (controls) { controls.target.set(0, 0, 0); controls.update(); }
+            replayPlayer.preview = buildPreview({ blocks: r.colors.map((c, i) => ({ pos: [r.frames[0][1 + i * 2], r.frames[0][2 + i * 2], 0], color: c })), obstacles: r.stage.obstacles || [] });
+            replayPlayer.lines = [];
+            const ui = el('div', { class: 'cg-panel', style: 'left: 50%; bottom: 20px; transform: translateX(-50%); padding: 10px 14px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; max-width: 94vw;' });
+            const timeLabel = el('span', { style: 'min-width: 120px; font-size: 12px;' });
+            const seek = el('input', { type: 'range', min: '0', max: String(r.clearTime), step: '0.05', value: '0', style: 'width: 220px;' });
+            seek.addEventListener('input', () => { replayPlayer.t = parseFloat(seek.value); });
+            const pauseBtn = el('button', { class: 'cg-btn', text: '一時停止', onclick: () => { replayPlayer.paused = !replayPlayer.paused; pauseBtn.textContent = replayPlayer.paused ? '再生' : '一時停止'; } });
+            const speedBtns = [0.5, 1, 2, 4].map(s => el('button', { class: 'cg-btn' + (s === 1 ? ' on' : ''), text: `x${s}`, onclick: (e) => { replayPlayer.speed = s; speedBtns.forEach(b => b.classList.remove('on')); e.target.classList.add('on'); } }));
+            const title = `${r.label === 'CUSTOM' ? (r.stage.name || 'CUSTOM') : 'STAGE ' + r.label} / ${r.mode === 'timeattack' ? DIFFICULTY_SETTINGS[r.difficulty].label : 'チュートリアル'} / ${r.clearTime.toFixed(2)}s`;
+            ui.appendChild(el('span', { text: 'REPLAY  ' + title, style: 'color: #00ffaa; font-size: 12px; margin-right: 8px;' }));
+            [pauseBtn, ...speedBtns, seek, timeLabel, el('button', { class: 'cg-btn warn', text: '終了', onclick: () => stopReplay() })].forEach(x => ui.appendChild(x));
+            document.body.appendChild(ui);
+            replayPlayer.ui = { root: ui, seek, timeLabel };
+        }
+        function stopReplay() {
+            if (!replayPlayer.active) return;
+            replayPlayer.active = false;
+            disposePreview(replayPlayer.preview && replayPlayer.preview.group);
+            replayPlayer.preview = null;
+            replayPlayer.lines.forEach(l => { scene.remove(l); });
+            replayPlayer.lines = [];
+            if (replayPlayer.ui) replayPlayer.ui.root.remove();
+            replayPlayer.ui = null;
+            inputLocked = false;
+            openRecords();
+        }
+        frameHooks.push(dt => {
+            if (!replayPlayer.active) return;
+            const r = replayPlayer.r;
+            if (!replayPlayer.paused) replayPlayer.t = Math.min(r.clearTime, replayPlayer.t + dt * replayPlayer.speed);
+            const t = replayPlayer.t;
+            const pos = replaySample(r, t);
+            const ms = replayPlayer.preview.blockMeshes;
+            ms.forEach((m, i) => m.position.set(pos[i * 2], pos[i * 2 + 1], 0));
+            // 水星は記録時と同じ式で時刻から位置を出す
+            (r.stage.obstacles || []).forEach((o, i) => { if (o.type === 'mercury') { const p = mercuryPos(o, t); replayPlayer.preview.obstacleMeshes[i].position.set(p[0], p[1], 0); } });
+            // 連結線：時刻 t までにできた連結だけ描く
+            const active = r.links.filter(l => l[0] <= t);
+            while (replayPlayer.lines.length < active.length) { const l = new THREE.Mesh(CONNECTION_GEO, CONNECTION_MAT); scene.add(l); replayPlayer.lines.push(l); }
+            while (replayPlayer.lines.length > active.length) scene.remove(replayPlayer.lines.pop());
+            active.forEach((l, i) => {
+                const a = ms[l[1]], b = ms[l[2]], line = replayPlayer.lines[i];
+                if (!a || !b) return;
+                const dir = new THREE.Vector3().subVectors(b.position, a.position);
+                line.position.addVectors(a.position, b.position).multiplyScalar(0.5);
+                line.scale.y = dir.length();
+                if (dir.length() > 0) line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+            });
+            if (replayPlayer.ui) { replayPlayer.ui.seek.value = String(t); replayPlayer.ui.timeLabel.textContent = `${t.toFixed(1)} / ${r.clearTime.toFixed(1)}s`; }
+        });
+
+
+        // ---------------------------------------------------------------------
+        // 記録・実績・リプレイ一覧の画面（Phase 5）
+        // ---------------------------------------------------------------------
+        let recordsPanel = null;
+        function closeRecords() { if (recordsPanel) { recordsPanel.remove(); recordsPanel = null; } }
+        function openRecords() {
+            hideAllMenus();
+            closeRecords();
+            const p = el('div', { class: 'cg-panel', id: 'records-panel', style: 'top: 0; left: 0; width: 100vw; height: 100vh; overflow-y: auto; padding: 28px 20px; display: flex; flex-direction: column; align-items: center;' });
+            recordsPanel = p;
+            p.appendChild(el('h3', { text: 'RECORDS', style: 'font-size: 28px;' }));
+            // 実績
+            p.appendChild(el('h4', { text: `実績（${Object.keys(save.achievements).length} / ${ACHIEVEMENTS.length}）` }));
+            const ach = el('table', { class: 'cg-table' });
+            ACHIEVEMENTS.forEach(a => {
+                const got = save.achievements[a.id];
+                ach.appendChild(el('tr', {}, [
+                    el('td', { text: got ? '★' : '☆', style: `color: ${got ? '#ffcc00' : '#445'};` }),
+                    el('td', { text: a.name, style: `text-align: left; color: ${got ? '#ffcc66' : '#7e93a0'};` }),
+                    el('td', { text: a.desc, style: 'text-align: left; color: #8fa3b0;' }),
+                    el('td', { text: got ? new Date(got).toLocaleDateString() : '-' })
+                ]));
+            });
+            p.appendChild(ach);
+            // ベストタイム（タイムアタックのみ）
+            p.appendChild(el('h4', { text: 'ベストタイム（タイムアタック・秒）' }));
+            const bt = el('table', { class: 'cg-table' });
+            bt.appendChild(el('tr', {}, [el('th', { text: 'STAGE' })].concat(DIFF_KEYS.map(k => el('th', { text: DIFFICULTY_SETTINGS[k].label })))));
+            stages.map((_, i) => String(i + 1)).concat(save.secretUnlocked || save.secretCleared ? ['SECRET'] : []).forEach(label => {
+                bt.appendChild(el('tr', {}, [el('td', { text: label })].concat(DIFF_KEYS.map(k => { const v = save.bestTimes[`${k}:${label}`]; return el('td', { text: v === undefined ? '-' : v.toFixed(2), style: v === undefined ? 'color:#445' : '' }); }))));
+            });
+            bt.appendChild(el('tr', {}, [el('td', { text: '最高スコア' })].concat(DIFF_KEYS.map(k => el('td', { text: save.bestScores[k] ? String(save.bestScores[k]) : '-' })))));
+            p.appendChild(bt);
+            p.appendChild(el('div', { class: 'cg-hint', text: `ボーナスステージ最高連結: ${save.bonusBest || 0}　／　裏ステージ: ${save.secretCleared ? 'クリア済み' : save.secretUnlocked ? '解放済み' : '未解放'}` }));
+            // リプレイ
+            p.appendChild(el('h4', { text: 'リプレイ（各ステージの自己ベストを自動保存）' }));
+            const items = loadReplays();
+            const rt = el('table', { class: 'cg-table' });
+            const rows = [];
+            if (lastReplay) rows.push(['直前のプレイ', lastReplay, null]);
+            Object.entries(items).sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0)).forEach(([key, r]) => rows.push(['自己ベスト', r, key]));
+            if (!rows.length) p.appendChild(el('div', { class: 'cg-hint', text: 'まだ記録がない。ステージをクリアすると自動で残る。' }));
+            rows.forEach(([kind, r, key]) => {
+                const name = r.label === 'CUSTOM' ? (r.stage.name || 'CUSTOM') : 'STAGE ' + r.label;
+                const diff = r.mode === 'timeattack' && DIFFICULTY_SETTINGS[r.difficulty] ? DIFFICULTY_SETTINGS[r.difficulty].label : 'チュートリアル';
+                rt.appendChild(el('tr', {}, [
+                    el('td', { text: kind }), el('td', { text: name }), el('td', { text: diff }), el('td', { text: r.clearTime.toFixed(2) + 's' }),
+                    el('td', {}, [el('button', { class: 'cg-btn', text: '再生', onclick: () => playReplay(r) }),
+                        key ? el('button', { class: 'cg-btn warn', text: '削除', onclick: () => { const it = loadReplays(); delete it[key]; saveReplays(it); openRecords(); } }) : null])
+                ]));
+            });
+            if (rows.length) p.appendChild(rt);
+            // データ消去（押し間違い防止に2回押し）
+            let armed = false;
+            const wipe = el('button', { class: 'cg-btn warn', text: '記録をすべて消す', onclick: () => {
+                if (!armed) { armed = true; wipe.textContent = 'もう一度押すと消える'; setTimeout(() => { armed = false; wipe.textContent = '記録をすべて消す'; }, 3000); return; }
+                storageRemove(SAVE_KEY); storageRemove(REPLAY_KEY); save = emptySave(); lastReplay = null; openRecords(); toast('記録を消した');
+            } });
+            p.appendChild(el('div', { style: 'margin-top: 18px;' }, [
+                el('button', { class: 'cg-btn', text: 'タイトルへ戻る', onclick: () => { closeRecords(); returnToTitle(); } }), wipe
+            ]));
+            document.body.appendChild(p);
+        }
+        document.getElementById('mode-records-button').addEventListener('click', openRecords);
+
+        // ---------------------------------------------------------------------
+        // AUTO DEMO：CPUが実際にブロックを動かしてステージを解く（Phase 6 / C2 の試作）
+        // ルールベース。LLM や重い探索は使わない：
+        //   1. まだ本体（ブロック0の集団）につながっていないブロックのうち、本体に一番近いものを選ぶ
+        //   2. 本体の一番近いブロックの隣へ運ぶ。途中に惑星の墜落圏があれば、その横を回り込む中継点を挟む
+        //   3. 全部つながったら、集団ごとアンカーへ運んで静かに離す
+        // 動かし方はプレイヤーのドラッグと同じ（質量0にして位置を直接動かす）ので、物理・連結・即死判定は本番そのまま
+        // ---------------------------------------------------------------------
+        const demo = { active: false, carrying: null, group: [], speed: 7, label: null };
+        const demoLabel = el('div', { style: 'position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); font-family: monospace; color: #66ccff; letter-spacing: 3px; font-size: 14px; z-index: 60; display: none; text-shadow: 0 0 10px #66ccff;' });
+        document.body.appendChild(demoLabel);
+        function startDemo() {
+            hideAllMenus();
+            gameMode = 'timeattack';
+            currentDifficulty = 'easy';
+            startGame();
+            demo.active = true;
+            inputLocked = true; // デモ中はプレイヤーの操作を止める（TITLE で抜けられる）
+            demoLabel.style.display = 'block';
+            demoLabel.textContent = 'AUTO DEMO  -  CPU PLAYING';
+        }
+        function stopDemo() {
+            demo.active = false; demo.carrying = null; demo.group = [];
+            demoLabel.style.display = 'none';
+        }
+        onGameEvent(type => { if (type === 'title') stopDemo(); });
+        document.getElementById('mode-demo-button').addEventListener('click', startDemo);
+        function killZones() {
+            return obstacles.filter(o => o.data.type !== 'repulsor').map(o => ({ x: o.mesh.position.x, y: o.mesh.position.y, r: o.radius + OBSTACLE_HIT_MARGIN + 0.9, moving: o.data.type === 'mercury' }));
+        }
+        // a→b の線分が墜落圏をかすめるなら、その障害物の脇を通る中継点を返す（なければ b）
+        function nextWaypoint(ax, ay, bx, by) {
+            const zones = killZones();
+            let worst = null, worstT = Infinity;
+            zones.forEach(z => {
+                const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy || 1;
+                const t = Math.max(0, Math.min(1, ((z.x - ax) * dx + (z.y - ay) * dy) / len2));
+                const px = ax + dx * t, py = ay + dy * t;
+                const extra = z.moving ? 1.2 : 0; // 動く水星には余裕を多めに取る
+                if (Math.hypot(px - z.x, py - z.y) < z.r + extra && t < worstT) { worst = { z, px, py, extra }; worstT = t; }
+            });
+            if (!worst) return [bx, by];
+            const { z, px, py, extra } = worst;
+            let nx = px - z.x, ny = py - z.y;
+            let n = Math.hypot(nx, ny);
+            if (n < 0.01) { nx = -(by - ay); ny = bx - ax; n = Math.hypot(nx, ny) || 1; } // 真正面なら進行方向の横へ
+            return [z.x + nx / n * (z.r + extra + 0.6), z.y + ny / n * (z.r + extra + 0.6)];
+        }
+        function setCarry(list, on) {
+            list.forEach(b => { b.body.mass = on ? 0 : 1; b.body.updateMassProperties(); b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
+        }
+        // 運んでいるブロック群を (tx,ty) へ向けて今フレームぶん動かす。着いたら true
+        function carryToward(lead, list, tx, ty, dt) {
+            const [wx, wy] = nextWaypoint(lead.body.position.x, lead.body.position.y, tx, ty);
+            const dx = wx - lead.body.position.x, dy = wy - lead.body.position.y, d = Math.hypot(dx, dy);
+            const step = Math.min(d, demo.speed * dt);
+            const mx = d > 0 ? dx / d * step : 0, my = d > 0 ? dy / d * step : 0;
+            // 質量0でも速度は位置に積分されるので（木星の引力などで速度が付く）、毎フレーム0に戻す
+            list.forEach(b => { b.body.position.x += mx; b.body.position.y += my; b.body.position.z *= 0.9; b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); b.prevPos.copy(b.body.position); });
+            return Math.hypot(tx - lead.body.position.x, ty - lead.body.position.y) < 0.05;
+        }
+        frameHooks.push(dt => {
+            if (!demo.active) return;
+            // クリア後は自分で NEXT STAGE を押す。ボーナス中は降ってくるブロックを眺めるだけ
+            const next = document.getElementById('next-stage-button');
+            if (next.style.display === 'block') { next.click(); return; }
+            if (!gameStarted || docked || bonusActive || !blocks.length || dt <= 0) return;
+            const main = getConnectedGroup(blocks[0]);
+            if (demo.carrying && (!blocks.includes(demo.carrying) || main.includes(demo.carrying))) { setCarry(demo.group, false); demo.carrying = null; demo.group = []; }
+            if (main.length < blocks.length) {
+                if (!demo.carrying) {
+                    // 本体の重心に一番近い、まだつながっていないブロック（とその仲間）を持つ
+                    let cx = 0, cy = 0; main.forEach(b => { cx += b.body.position.x; cy += b.body.position.y; }); cx /= main.length; cy /= main.length;
+                    let best = null, bd = Infinity;
+                    blocks.forEach(b => { if (main.includes(b)) return; const d = Math.hypot(b.body.position.x - cx, b.body.position.y - cy); if (d < bd) { bd = d; best = b; } });
+                    demo.carrying = best;
+                    demo.group = getConnectedGroup(best);
+                    setCarry(demo.group, true);
+                    setCarry(main, true); // 本体も止めておく（流れていくと狙いがずれる）
+                }
+                main.forEach(b => { b.body.velocity.set(0, 0, 0); b.body.angularVelocity.set(0, 0, 0); });
+                // 本体で一番近いブロックの、こちら側 1.0 の位置へ運ぶ
+                const c = demo.carrying;
+                let target = null, td = Infinity;
+                main.forEach(b => { const d = c.body.position.distanceTo(b.body.position); if (d < td) { td = d; target = b; } });
+                const dx = c.body.position.x - target.body.position.x, dy = c.body.position.y - target.body.position.y, n = Math.hypot(dx, dy) || 1;
+                carryToward(c, demo.group, target.body.position.x + dx / n * 1.0, target.body.position.y + dy / n * 1.0, dt);
+                if (td < 1.45) { attemptDock(c); }
+            } else {
+                // 全部つながった：集団ごとアンカーへ運び、着いたら離す（止まっていればドッキング判定が通る）
+                if (demo.carrying) { setCarry(demo.group, false); demo.carrying = null; }
+                let cx = 0, cy = 0; main.forEach(b => { cx += b.body.position.x; cy += b.body.position.y; }); cx /= main.length; cy /= main.length;
+                setCarry(main, true);
+                const arrived = carryToward({ body: { position: { x: cx, y: cy } } }, main, 0, 0, dt) || Math.hypot(cx, cy) < 0.3;
+                if (arrived) setCarry(main, false);
+            }
+        });
+
+    </script>
+    <!-- FEATURES V2 END -->
+</body>
+
+</html>
