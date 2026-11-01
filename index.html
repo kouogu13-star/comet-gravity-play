@@ -3549,6 +3549,130 @@
             document.getElementById('mode-challenge-button').addEventListener('click', openChallengeList);
         })();
 
+
+        // ---------------------------------------------------------------------
+        // ステージ共有リンク（サーバーなし）
+        // ステージのデータを圧縮して URL の # 以降に入れる。# 以降はサーバーへ送られないので、GitHub Pages のままで使える。
+        // 開いた側は normalizeStage（形式チェック）を通したものだけを読む（リンクの中身はそのまま信用しない）
+        // ---------------------------------------------------------------------
+        const SHARE_PREFIX = '#stage=';
+        const SHARE_MAX_CHARS = 20000; // これより長いリンクは読まない（壊れた・いたずらのリンク対策）
+        function bytesToB64url(bytes) {
+            let s = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+            return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+        function b64urlToBytes(str) {
+            const b = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+            const out = new Uint8Array(b.length);
+            for (let i = 0; i < b.length; i++) out[i] = b.charCodeAt(i);
+            return out;
+        }
+        async function pipeBytes(bytes, stream) {
+            const res = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+            return new Uint8Array(await res.arrayBuffer());
+        }
+        // 先頭1文字が方式：z = deflate 圧縮（対応ブラウザ）、j = 圧縮なし
+        async function encodeStageForShare(stage) {
+            const s = Object.assign({}, stage); delete s.format; delete s.version;
+            const raw = new TextEncoder().encode(JSON.stringify(s));
+            if (typeof CompressionStream === 'function') {
+                try { return 'z' + bytesToB64url(await pipeBytes(raw, new CompressionStream('deflate-raw'))); } catch (e) { }
+            }
+            return 'j' + bytesToB64url(raw);
+        }
+        async function decodeSharedStage(code) {
+            if (!code || code.length > SHARE_MAX_CHARS) throw new Error('リンクが長すぎるか空');
+            if (code[0] !== 'z' && code[0] !== 'j') throw new Error('知らない形式のリンク');
+            if (code[0] === 'z' && typeof DecompressionStream !== 'function') throw new Error('このブラウザは圧縮されたリンクを開けない');
+            let raw;
+            try {
+                let bytes = b64urlToBytes(code.slice(1));
+                if (code[0] === 'z') bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+                if (bytes.length > 200000) throw new Error('big');
+                raw = JSON.parse(new TextDecoder().decode(bytes));
+            } catch (e) { throw new Error('リンクが壊れている（途中で切れていないか確認して）'); }
+            const n = normalizeStage(Object.assign({ format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION }, raw));
+            if (!n.stage) throw new Error(n.errors[0]);
+            return n.stage;
+        }
+        function shareUrlFor(code) { return location.origin + location.pathname + location.search + SHARE_PREFIX + code; }
+        // リンクを作ってクリップボードへ。コピーできない環境では、選択済みの入力欄で見せる
+        async function shareStageLink(stage) {
+            const n = normalizeStage(stage);
+            if (!n.stage) { toast('エラーがあるので共有できない'); return; }
+            const url = shareUrlFor(await encodeStageForShare(n.stage));
+            let copied = false;
+            try { await navigator.clipboard.writeText(url); copied = true; } catch (e) { }
+            showShareBox(url, copied);
+        }
+        let shareBox = null;
+        function closeShareBox() { if (shareBox) { shareBox.remove(); shareBox = null; } }
+        function showShareBox(url, copied) {
+            closeShareBox();
+            const input = el('input', { type: 'text', readonly: 'readonly', style: 'width: 100%; box-sizing: border-box; background: #08141c; color: #cfe6dd; border: 1px solid #2b4f5f; font-family: monospace; font-size: 12px; padding: 6px;' });
+            input.value = url;
+            shareBox = el('div', { class: 'cg-panel', id: 'share-box', style: 'background: rgba(4, 10, 16, 0.98); top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(520px, 92vw); padding: 16px; z-index: 260;' }, [
+                el('h3', { text: copied ? '共有リンクをコピーした' : '共有リンク' }),
+                el('div', { class: 'cg-hint', text: copied ? 'このリンクを開くと、同じステージで遊べる（サーバーには何も送っていない）。' : 'コピーできなかったので、下のリンクを長押し（右クリック）でコピーして。' }),
+                input,
+                el('div', { style: 'margin-top: 10px; text-align: right;' }, [el('button', { class: 'cg-btn', text: '閉じる', onclick: closeShareBox })])
+            ]);
+            document.body.appendChild(shareBox);
+            input.focus(); input.select();
+        }
+        // エディターの「保存・共有」に共有ボタンを足す（JSON書き出しの隣）。パネルは refreshEditor のたびに作り直されるので、その後に足す
+        const refreshEditorBase = refreshEditor;
+        refreshEditor = function () {
+            refreshEditorBase.apply(this, arguments);
+            const p = document.getElementById('editor-panel');
+            if (!p || p.querySelector('#share-link-button')) return;
+            const exp = Array.from(p.querySelectorAll('button')).find(b => b.textContent === 'JSON書き出し');
+            if (exp) exp.parentElement.insertBefore(el('button', { class: 'cg-btn', id: 'share-link-button', text: '共有リンク', onclick: () => shareStageLink(editor.stage) }), exp);
+        };
+
+        // --- 共有リンクで開かれたとき：タイトルの上に「遊ぶ / エディターで開く」を出す ---
+        let sharedPanel = null;
+        function closeSharedPanel(clearHash) {
+            if (sharedPanel) { sharedPanel.remove(); sharedPanel = null; }
+            // 同じリンクで再読み込みしたときにまた出ないよう、# 以降を消す（履歴は増やさない）
+            if (clearHash && location.hash.startsWith(SHARE_PREFIX)) history.replaceState(null, '', location.pathname + location.search);
+        }
+        function playShared(stage, mode) {
+            closeSharedPanel(true);
+            if (editor.active) closeEditor();
+            returnToTitle(); // 遊んでいる途中に別のリンクを開いた場合も、いったん盤面と予約をきれいにしてから始める
+            hideAllMenus();
+            editor.stage = JSON.parse(JSON.stringify(stage));
+            editor.testDifficulty = 'normal';
+            startCustomTest(mode); // テストプレイと同じ仕組み。EDITOR ボタンで中身を見たり直したりできる
+        }
+        async function openSharedFromHash() {
+            if (!location.hash.startsWith(SHARE_PREFIX)) return;
+            let stage;
+            try { stage = await decodeSharedStage(decodeURIComponent(location.hash.slice(SHARE_PREFIX.length))); }
+            catch (e) { toast('共有リンクを読めなかった: ' + e.message); closeSharedPanel(true); return; }
+            closeSharedPanel(false);
+            const obs = (stage.obstacles || []).length;
+            sharedPanel = el('div', { class: 'cg-panel', id: 'shared-stage-panel', style: 'background: rgba(4, 10, 16, 0.98); top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(460px, 92vw); padding: 18px; z-index: 260; text-align: center;' }, [
+                el('h3', { text: '共有されたステージ' }),
+                el('div', { text: stage.name || '（名前なし）', style: 'font-size: 20px; color: #ffcc66; margin: 4px 0;' }),
+                el('div', { class: 'cg-hint', text: `ブロック ${stage.blocks.length} 個・障害物 ${obs} 個` }),
+                el('div', { style: 'margin-top: 12px;' }, [
+                    el('button', { class: 'cg-btn', text: 'タイムアタックで遊ぶ（普通）', onclick: () => playShared(stage, 'timeattack') }),
+                    el('button', { class: 'cg-btn', text: 'チュートリアルで遊ぶ', onclick: () => playShared(stage, 'idle') })
+                ]),
+                el('div', {}, [
+                    el('button', { class: 'cg-btn', text: 'エディターで開く', onclick: () => { closeSharedPanel(true); if (editor.active) closeEditor(); returnToTitle(); openEditor(JSON.parse(JSON.stringify(stage))); } }),
+                    el('button', { class: 'cg-btn warn', text: '閉じる', onclick: () => closeSharedPanel(true) })
+                ])
+            ]);
+            document.body.appendChild(sharedPanel);
+        }
+        openSharedFromHash();
+        // ページを開いたまま別の共有リンクを貼った場合も拾う
+        window.addEventListener('hashchange', openSharedFromHash);
+
     </script>
     <!-- FEATURES V2 END -->
 </body>
