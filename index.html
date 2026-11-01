@@ -841,6 +841,8 @@
         let dragTarget = null;
         // 塊の「追従のしやすさ」。1 ならカーソルにぴったりつく（従来どおり）。1未満なら追加機能側が毎フレーム追いつかせる
         let dragFollowFactor = group => 1;
+        // つかめるかどうか。false のブロック（を含む塊）はドラッグを始められない。持っている途中で false になったらその場で手を離す
+        let canGrabBlock = block => true;
         let rotating = null;
         let dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
         let mouseHistory = [];
@@ -884,6 +886,7 @@
             const intersects = raycaster.intersectObjects(meshes);
             // ぴったり当たらなくても、画面上で28px以内に近いブロックがあればそれをつかむ
             const picked = intersects.length > 0 ? blocks.find(b => b.mesh === intersects[0].object) : pickNearestBlockOnScreen(e.clientX, e.clientY, 28);
+            if (picked && !canGrabBlock(picked)) { emitGameEvent('grabDenied', { block: picked }); return; }
             if (picked) {
                 const block = picked;
                 if (block) {
@@ -908,6 +911,8 @@
             const dy = e.clientY - lastMouseY;
             lastMouseX = e.clientX;
             lastMouseY = e.clientY;
+            // 持っているブロックが、つかめない塊につながった：そっと離す（投げる勢いは付けない）
+            if (dragging && !canGrabBlock(dragging)) { mouseHistory = []; onMouseUp(e); emitGameEvent('grabReleased', {}); return; }
             if (dragging) {
                 mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
                 mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -2048,7 +2053,8 @@
             { id: 'secret_clear', name: '裏ステージ踏破', desc: '裏ステージをクリアする' },
             { id: 'bonus_20', name: '大連結', desc: 'ボーナスステージで20個以上をひとつにつなぐ' },
             { id: 'creator', name: 'ステージ職人', desc: 'エディターでステージを保存する' },
-            { id: 'custom_clear', name: '自作ステージ攻略', desc: 'エディターで作ったステージをクリアする' }
+            { id: 'custom_clear', name: '自作ステージ攻略', desc: 'エディターで作ったステージをクリアする' },
+            { id: 'challenge_all', name: 'ギミック使い', desc: 'チャレンジステージをすべてクリアする' }
         ];
         function emptySave() {
             return { version: SAVE_VERSION, bestTimes: {}, bestScores: {}, cleared: {}, secretUnlocked: false, secretCleared: false, bonusBest: 0, achievements: {} };
@@ -2101,7 +2107,7 @@
             if (type === 'runStart') { runDeaths = 0; runScore = 0; }
             if (type === 'death') runDeaths++;
             if (type === 'stageClear') {
-                if (d.label === 'CUSTOM') { unlock('custom_clear'); return; }
+                if (d.label === 'CUSTOM') { if (!challenge.active) unlock('custom_clear'); return; } // チャレンジの記録は features_7 側で持つ
                 unlock('first_clear');
                 save.cleared[d.label] = true;
                 if (d.mode === 'timeattack' && d.difficulty) {
@@ -2161,6 +2167,8 @@
                     // 新ギミック：重量ブロック（heavy）と磁力ブロック（magnet: 'N' か 'S'）。それ以外の値は捨てる
                     if (b.heavy === true) blk.heavy = true;
                     if (b.magnet === 'N' || b.magnet === 'S') blk.magnet = b.magnet;
+                    // つかめないブロック（nograb）：手では動かせず、磁力・ワープ・重力場などでしか動かない
+                    if (b.nograb === true) blk.nograb = true;
                     out.blocks.push(blk);
                 });
             }
@@ -2246,8 +2254,8 @@
             if (!group) return;
             scene.remove(group);
             group.traverse(o => {
-                if (o.geometry && o.geometry !== PREVIEW_BOX) o.geometry.dispose();
-                if (o.material) o.material.dispose();
+                if (o.geometry && o.geometry !== PREVIEW_BOX && !o.isSprite) o.geometry.dispose(); // スプライトの板は three.js 全体で1つを共有している
+                if (o.material && !o.userData.shared) o.material.dispose(); // 磁石の N/S や鍵の印は全体で共有しているので捨てない
             });
         }
         function circleLine(radius, color, opacity) {
@@ -2267,6 +2275,8 @@
             const blockMeshes = (stage.blocks || []).map(b => {
                 const m = makePreviewBlock(gimmickBlockColor(b), opts.blockOpacity === undefined ? 1 : opts.blockOpacity);
                 if (b.heavy) m.scale.setScalar(HEAVY_SCALE);
+                if (b.magnet) m.add(magnetLabel(b.magnet));
+                if (b.nograb) m.add(lockBadge());
                 m.position.set(b.pos[0], b.pos[1], 0);
                 group.add(m);
                 return m;
@@ -2541,6 +2551,11 @@
                     const kindSel = el('select', {}, [['normal', 'ふつう'], ['heavy', '重い（動かしにくい）'], ['N', '磁石 N'], ['S', '磁石 S']].map(([v, l]) => { const o = el('option', { value: v, text: l }); if (v === kind) o.selected = true; return o; }));
                     kindSel.addEventListener('change', () => { delete b.heavy; delete b.magnet; if (kindSel.value === 'heavy') b.heavy = true; if (kindSel.value === 'N' || kindSel.value === 'S') b.magnet = kindSel.value; refreshEditor(); });
                     p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: '種類' }), kindSel]));
+                    // つかめない（手で動かせない。磁石・ワープ・重力場でだけ動く）。種類とは別に重ねて付けられる
+                    const ng = el('input', { type: 'checkbox', style: 'width: auto;' });
+                    ng.checked = !!b.nograb;
+                    ng.addEventListener('change', () => { if (ng.checked) b.nograb = true; else delete b.nograb; refreshEditor(); });
+                    p.appendChild(el('div', { class: 'cg-row' }, [el('label', { text: 'つかめない' }), ng]));
                 } else {
                     const o = editor.stage.obstacles[sel.index];
                     const names = { mars: '火星（固定・触れ続けると墜落）', mercury: '水星（周回・触れ続けると墜落）', jupiter: '木星（引力・本体で墜落）', repulsor: '反発フィールド（押し返す・墜落しない）', warp: 'ワープゲート（入口に入った塊を出口へ移す・墜落しない）', gravfield: '重力フィールド（範囲内を一方向へ流す・墜落しない）' };
@@ -2683,7 +2698,7 @@
         }
         onGameEvent((type, d) => {
             if (type === 'title') editorReturnBtn.style.display = 'none';
-            if (type === 'stageClear' && d.label === 'CUSTOM') later(() => toast(`クリア！ ${d.clearTime.toFixed(2)}秒　EDITORで編集に戻れる`), 800);
+            if (type === 'stageClear' && d.label === 'CUSTOM' && !challenge.active) later(() => toast(`クリア！ ${d.clearTime.toFixed(2)}秒　EDITORで編集に戻れる`), 800);
         });
         document.getElementById('mode-editor-button').addEventListener('click', () => openEditor());
 
@@ -3052,6 +3067,8 @@
         const WARP_COOLDOWN_MS = 1200;// ワープ直後に連続で飛ばないための待ち時間
         // 磁力で出る速さの上限。上限が無いと、同じ極が近くにあり続ける間ずっと加速して塊ごと画面外へ飛んでいった（遊んで確認した）
         const MAGNET_SPEED_CAP = 3.5;
+        const NOGRAB_DAMPING = 0.7;   // つかめないブロック（とつながった塊）の空気抵抗（1秒で速さが約3割になる）
+        const LEASH_DIST = 2.0;       // 手で持った磁石と錠前の塊が落ち着く距離
         function capSpeed(b) {
             const v = b.body.velocity, s = Math.hypot(v.x, v.y);
             if (s > MAGNET_SPEED_CAP) { v.x *= MAGNET_SPEED_CAP / s; v.y *= MAGNET_SPEED_CAP / s; }
@@ -3083,6 +3100,26 @@
             s.userData.magnetLabel = true;
             return s;
         }
+        // つかめないブロックの印（右上の小さな錠前）。全ブロックで共有
+        let lockBadgeMat = null;
+        function lockBadge() {
+            if (!lockBadgeMat) {
+                const c = document.createElement('canvas'); c.width = c.height = 64;
+                const g = c.getContext('2d');
+                g.fillStyle = 'rgba(0,0,0,0.55)'; g.beginPath(); g.arc(32, 32, 30, 0, Math.PI * 2); g.fill();
+                g.strokeStyle = '#ffffff'; g.lineWidth = 6;
+                g.beginPath(); g.arc(32, 26, 10, Math.PI, 0); g.stroke();      // つる
+                g.fillStyle = '#ffffff'; g.fillRect(17, 26, 30, 22);            // 本体
+                g.fillStyle = '#000000'; g.fillRect(30, 32, 4, 9);              // 鍵穴
+                lockBadgeMat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true });
+            }
+            const s = new THREE.Sprite(lockBadgeMat);
+            s.scale.set(0.55, 0.55, 1);
+            s.position.set(0.45, 0.45, 0.6);
+            s.userData.shared = true;
+            s.userData.lockBadge = true;
+            return s;
+        }
         function applyBlockLook(b) {
             const col = gimmickBlockColor({ color: b.baseColor, heavy: b.heavy, magnet: b.magnet });
             b.mesh.material.color.setHex(col);
@@ -3094,6 +3131,7 @@
                 const edge = b.mesh.children.find(c => c.isLineSegments);
                 if (edge) edge.material.color.setHex(0xffaa33); // 重いブロックは枠をオレンジに
             }
+            if (b.nograb && !b.mesh.children.some(c => c.userData.lockBadge)) b.mesh.add(lockBadge());
         }
         // ワープ出口の目印と、入口→出口の点線（エディターのプレビューとゲーム中の両方で使う）
         function makeWarpExit(o) {
@@ -3132,8 +3170,13 @@
                 b.heavy = !!src.heavy;
                 b.magnet = src.magnet || null;
                 b.baseMass = b.heavy ? HEAVY_MASS : 1;
+                b.nograb = !!src.nograb;
                 if (b.heavy) { b.body.mass = HEAVY_MASS; b.body.updateMassProperties(); }
-                if (b.heavy || b.magnet) applyBlockLook(b);
+                // つかめないブロックは他のブロックとぶつからない（投げたブロックを当てて押し出す抜け道を塞ぐ）。つながり（拘束）は普通に効く
+                // さらに強い空気抵抗を付けてすぐ止まるようにする。普通のブロック（0.05）のままだと、磁力で引いたあと
+                // 勢いが残って流れ続け、つかんで止める手段がないので壁まで行ってしまう
+                if (b.nograb) { b.body.collisionFilterGroup = 2; b.body.collisionFilterMask = 0; b.body.linearDamping = NOGRAB_DAMPING; }
+                if (b.heavy || b.magnet || b.nograb) applyBlockLook(b);
             });
             clearGimmickVisuals();
             const extra = (sd.obstacles || []).filter(o => o.type === 'warp' || o.type === 'gravfield');
@@ -3158,7 +3201,7 @@
             return heavy ? 1 / (1 + 1.2 * heavy) : 1;
         };
         frameHooks.push(dt => {
-            if (!dragging || !dragTarget || dt <= 0) return;
+            if (!dragging || !dragTarget || dt <= 0 || !canGrabBlock(dragging)) return;
             const group = [dragging].concat(dragGroup);
             const follow = dragFollowFactor(group);
             if (follow >= 1) return;
@@ -3184,7 +3227,13 @@
                 const sign = a.magnet === c.magnet ? -1 : 1; // 1=引き合う, -1=反発
                 // 範囲の外側2割でなだらかに0へ落とす（境界で急に切れないように）
                 const fade = d > MAGNET_RANGE * 0.8 ? (MAGNET_RANGE - d) / (MAGNET_RANGE * 0.2) : 1;
-                const acc = Math.min(MAGNET_K / (d * d), MAGNET_MAX) * sign * fade;
+                let acc = Math.min(MAGNET_K / (d * d), MAGNET_MAX) * sign * fade;
+                // 手で持った磁石で錠前の塊を引くときは「ひも」のようにする：LEASH_DIST より近いと押し返す。
+                // 普通に引き合わせると、錠前ブロックが勢いで持っている磁石に追いついて勝手にくっつき、そこで動かせなくなった（自動プレイで確認）
+                const towed = a.body.mass === 0 ? c : c.body.mass === 0 ? a : null; // 持っていない側
+                if (sign > 0 && towed && towed.body.mass > 0 && getConnectedGroup(towed).some(x => x.nograb)) {
+                    acc *= Math.max(-1, Math.min(1, (d - LEASH_DIST) / 0.5));
+                }
                 const ux = dx / d, uy = dy / d;
                 if (a.body.mass > 0) { a.body.velocity.x += ux * acc * dt / a.body.mass; a.body.velocity.y += uy * acc * dt / a.body.mass; capSpeed(a); }
                 if (c.body.mass > 0) { c.body.velocity.x -= ux * acc * dt / c.body.mass; c.body.velocity.y -= uy * acc * dt / c.body.mass; capSpeed(c); }
@@ -3206,6 +3255,46 @@
             const now = Date.now();
             if (now - lastTap.t < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) { toggleMagnetAt(e.clientX, e.clientY); lastTap.t = 0; return; }
             lastTap = { t: now, x: e.clientX, y: e.clientY };
+        });
+
+        // --- つかめないブロック：これを含む塊は手で動かせない。磁力・ワープ・重力フィールドなどで運ぶ ---
+        // 手で持てないので、ステージ側で「ギミックを使わないと解けない」状況を作れる（チャレンジステージ用）
+        canGrabBlock = b => !getConnectedGroup(b).some(x => x.nograb);
+        let nograbHintShown = false;
+        function flashBlock(b) {
+            if (!b || !b.mesh) return;
+            const m = b.mesh.material, old = m.emissiveIntensity;
+            m.emissiveIntensity = 1.6;
+            setTimeout(() => { if (b.mesh && b.mesh.material === m) m.emissiveIntensity = old; }, 180);
+        }
+        onGameEvent((type, d) => {
+            if (type === 'grabDenied') {
+                getConnectedGroup(d.block).forEach(flashBlock);
+                if (!nograbHintShown) { nograbHintShown = true; toast('錠前のブロック（とつながった塊）は手で動かせない'); }
+            }
+            if (type === 'grabReleased') toast('錠前のブロックにつながった');
+            if (type === 'title') nograbHintShown = false;
+        });
+        // 錠前ブロックにつながったブロックにも同じ空気抵抗を付ける。付けないと、つないだときの押し合いで塊ごと流れ出し、
+        // つかんで止められないまま中央から離れていった（自動プレイで塊が4以上流れてクリアできなくなった）
+        physicsHooks.push(() => {
+            blocks.forEach(b => {
+                if (!b.nograb) return;
+                getConnectedGroup(b).forEach(x => { x.body.linearDamping = NOGRAB_DAMPING; x.body.angularDamping = NOGRAB_DAMPING; });
+            });
+        });
+        // マウスを止めたまま（重い塊の追従などで）つながった場合も、次のフレームで手を離す
+        frameHooks.push(() => {
+            if (!dragging) return;
+            // つかめないブロックは他とぶつからないので、磁力で寄ってきたときに持っているブロックをすり抜けてしまう。
+            // 持っているブロックのそばまで来たら、ドラッグで近づけたときと同じようにつなぐ
+            if (blocks.some(b => b.nograb && b.body.mass > 0 && b.body.position.distanceTo(dragging.body.position) < 1.5)) attemptDock(dragging);
+            if (!canGrabBlock(dragging)) { mouseHistory = []; onMouseUp({}); emitGameEvent('grabReleased', {}); }
+        });
+        // 錠前の塊につながった瞬間（手を離した瞬間）に塊の勢いを消す。持っていたブロックが押し込んだ分で塊が流れないように
+        onGameEvent(type => {
+            if (type !== 'grabReleased') return;
+            blocks.forEach(b => { if (b.nograb) getConnectedGroup(b).forEach(x => { x.body.velocity.set(0, 0, 0); x.body.angularVelocity.set(0, 0, 0); }); });
         });
 
         // --- ワープゲート：入口に入ったブロックを、つながっている塊ごと出口へ移す ---
@@ -3275,6 +3364,190 @@
               obstacles: [{ type: 'gravfield', pos: [0, 6, 0], radius: 0.5, range: 3, strength: 2.5, angle: 270 },
                 { type: 'gravfield', pos: [6, -2, 0], radius: 0.5, range: 2.5, strength: 2.5, angle: 0 }] }
         ];
+
+
+        // ---------------------------------------------------------------------
+        // チャレンジステージ：ギミックを使わないと解けないステージ
+        // 錠前の付いた「つかめないブロック」が必ず1つある。手では動かせないので、磁力・ワープ・重力フィールドで運ぶしかない。
+        // 本編とは別枠（記録も別に持つ）。難易度は「普通」（墜落までの猶予1.0秒）で固定
+        // ---------------------------------------------------------------------
+        // 檻：中心 (cx, cy) から半径 r の円周に火星を n 個並べる。隣どうしの墜落圏が重なるように置くので、すき間から引き出せない
+        function marsCage(cx, cy, r, n, marsRadius, startDeg) {
+            const out = [];
+            for (let i = 0; i < n; i++) {
+                const a = THREE.MathUtils.degToRad(startDeg + i * 360 / n);
+                out.push({ type: 'mars', pos: [+(cx + Math.cos(a) * r).toFixed(2), +(cy + Math.sin(a) * r).toFixed(2), 0], radius: marsRadius });
+            }
+            return out;
+        }
+        const CHALLENGE_STAGES = [
+            {
+                id: 'c1', name: '引き寄せ',
+                desc: '磁石で、錠前のブロックを中央まで引っぱってくる。',
+                hint: '錠前のブロックはつかめない。N の磁石を持って近づけると S が寄ってくる（間に火星）',
+                stage: { blocks: [
+                    { pos: [-8, 6, 0], color: 0xff0000, magnet: 'S', nograb: true },
+                    { pos: [8, -6, 0], color: 0x00ff00, magnet: 'N' },
+                    { pos: [8, 6, 0], color: 0x0000ff }, { pos: [-8, -6, 0], color: 0xffff00 }, { pos: [0, -8.5, 0], color: 0xff00ff }],
+                  obstacles: [{ type: 'mars', pos: [-4, 3, 0], radius: 1.0 }] }
+            },
+            {
+                id: 'c2', name: '檻とワープ',
+                desc: '火星の檻に閉じこめられたブロックを、ワープで外へ出す。',
+                hint: '引っぱると火星に当たる。檻の中のワープ（紫の輪）へ押しこもう。同じ極どうしは反発する（磁石をダブルクリック／ダブルタップで極が変わる）',
+                stage: { blocks: [
+                    { pos: [-7.4, 6.2, 0], color: 0xff0000, magnet: 'N', nograb: true },
+                    { pos: [7, -7, 0], color: 0x00ff00, magnet: 'S' },
+                    { pos: [8, 5, 0], color: 0x0000ff }, { pos: [-6, -7, 0], color: 0xffff00 }, { pos: [2, -9, 0], color: 0x00ffff }],
+                  // 火星 r0.7（墜落圏1.6）を半径3.4の円に8個：隣との間隔2.6 < 墜落圏の和3.2 なので閉じている。中の安全な範囲は半径1.8
+                  // ワープは中心から0.9（檻の中心から見て左上＝ゴールと反対側）。手前に引くだけでは入らない
+                  obstacles: marsCage(-7.4, 6.2, 3.4, 8, 0.7, 22.5).concat([
+                    { type: 'warp', pos: [-8.09, 6.78, 0], radius: 0.5, exit: [0, -0.6, 0], keepVelocity: false }]) }
+            },
+            {
+                id: 'c3', name: '向かい風',
+                desc: '上向きの重力フィールドをよけて、ブロックを回りこませる。',
+                hint: '緑の矢印の範囲に入ると上へ押し戻される。磁石で横から回りこませよう',
+                stage: { blocks: [
+                    { pos: [0, 9.5, 0], color: 0xff0000, magnet: 'S', nograb: true },
+                    { pos: [-8, -7, 0], color: 0x00ff00, magnet: 'N' },
+                    { pos: [8, -7, 0], color: 0x0000ff }, { pos: [9, 3, 0], color: 0xffff00 }, { pos: [-9, 3, 0], color: 0xff00ff }],
+                  obstacles: [
+                    { type: 'gravfield', pos: [0, 5.3, 0], radius: 0.5, range: 2.6, strength: 7, angle: 90 }, // 7 は磁力の上限6より強い＝真上から引っぱって突っ切ることはできない
+                    { type: 'mars', pos: [-6.3, 5.5, 0], radius: 0.9 }, { type: 'mars', pos: [6.3, 5.5, 0], radius: 0.9 }] }
+            }
+        ];
+        // 形式チェックを通したものだけを使う（データの書き間違いをここで止める）
+        CHALLENGE_STAGES.forEach(c => {
+            const n = normalizeStage(Object.assign({ format: STAGE_FORMAT, version: STAGE_FORMAT_VERSION, name: c.name }, c.stage));
+            if (!n.stage) console.error('[チャレンジ] 形式エラー', c.id, n.errors);
+            c.stage = n.stage || n.draft;
+        });
+
+        // --- 記録（本編のセーブとは別のキー） ---
+        const CHALLENGE_KEY = 'cometGravity.challenge';
+        function loadChallengeSave() {
+            const out = { best: {} };
+            try {
+                const raw = JSON.parse(storageGet(CHALLENGE_KEY) || '{}');
+                if (raw && raw.best && typeof raw.best === 'object') CHALLENGE_STAGES.forEach(c => {
+                    const v = raw.best[c.id];
+                    if (typeof v === 'number' && isFinite(v) && v > 0) out.best[c.id] = v;
+                });
+            } catch (e) { }
+            return out;
+        }
+        let challengeSave = loadChallengeSave();
+        const challenge = { active: false, index: -1 };
+
+        // --- 画面 ---
+        (function () {
+            const st = document.createElement('style');
+            st.textContent = `@media (max-width: 700px) {
+                #challenge-retry-button { top: 8px !important; right: 222px !important; font-size: 11px !important; padding: 6px 8px !important; letter-spacing: 1px !important; }
+                #challenge-hint { font-size: 11px !important; bottom: 10px !important; }
+            }`;
+            document.head.appendChild(st);
+        })();
+        const challengeHint = el('div', { id: 'challenge-hint', style: 'position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); max-width: 92vw; box-sizing: border-box; font-family: monospace; color: #ffdd88; background: rgba(0,0,0,0.55); border: 1px solid #6a5a2a; padding: 8px 14px; font-size: 13px; line-height: 1.5; z-index: 60; display: none; text-align: center; pointer-events: none;' });
+        document.body.appendChild(challengeHint);
+        const challengeRetryBtn = el('button', { class: 'cg-hud-btn', id: 'challenge-retry-button', text: 'やり直す', style: 'right: 452px;' });
+        document.body.appendChild(challengeRetryBtn);
+        challengeRetryBtn.addEventListener('click', () => {
+            // 墜落の演出中・クリア後は押しても何もしない（予約済みの再読み込みと二重になるため）
+            if (!challenge.active || !gameStarted || docked) return;
+            reloadCurrentStage();
+        });
+        let challengePanel = null;
+        function closeChallengePanel() { if (challengePanel) { challengePanel.remove(); challengePanel = null; } }
+        function openChallengeList() {
+            hideAllMenus();
+            closeChallengePanel();
+            const p = el('div', { class: 'cg-panel', id: 'challenge-panel', style: 'top: 0; left: 0; width: 100vw; height: 100vh; overflow-y: auto; padding: 28px 20px; display: flex; flex-direction: column; align-items: center;' });
+            challengePanel = p;
+            p.appendChild(el('h3', { text: 'CHALLENGE', style: 'font-size: 28px;' }));
+            p.appendChild(el('div', { class: 'cg-hint', style: 'max-width: 560px; text-align: center; margin-bottom: 10px;', text: '錠前のブロックは手でつかめない。磁石・ワープ・重力フィールドを使って中央まで運び、全部つなげればクリア。錠前の塊は持てないので、先に錠前ブロックを中央へ運んでから残りをつなごう。難易度は「普通」固定。' }));
+            CHALLENGE_STAGES.forEach((c, i) => {
+                const best = challengeSave.best[c.id];
+                const row = el('div', { style: 'width: min(560px, 92vw); border: 1px solid #1f3f4a; padding: 10px 12px; margin: 5px 0; display: flex; align-items: center; gap: 10px;' }, [
+                    el('div', { style: 'flex: 1;' }, [
+                        el('div', { text: `${i + 1}. ${c.name}`, style: 'color: #00ffaa; font-size: 15px; letter-spacing: 2px;' }),
+                        el('div', { class: 'cg-hint', text: c.desc }),
+                        el('div', { class: 'cg-hint', text: best ? `ベスト ${best.toFixed(2)}秒` : '未クリア', style: best ? 'color: #ffcc66;' : '' })
+                    ]),
+                    el('button', { class: 'cg-btn', text: '挑戦', onclick: () => startChallenge(i) })
+                ]);
+                p.appendChild(row);
+            });
+            p.appendChild(el('div', { style: 'margin-top: 18px;' }, [el('button', { class: 'cg-btn', text: 'タイトルへ戻る', onclick: () => { closeChallengePanel(); returnToTitle(); } })]));
+            document.body.appendChild(p);
+        }
+        function startChallenge(i) {
+            const c = CHALLENGE_STAGES[i];
+            closeChallengePanel();
+            closeChallengeResult();
+            hideAllMenus();
+            gameMode = 'timeattack';
+            currentDifficulty = 'normal';
+            startGame();
+            customStageActive = true;
+            customStageData = c.stage;
+            challenge.active = true; challenge.index = i;
+            loadStageData(c.stage, 'CUSTOM');
+            document.getElementById('stage-num').textContent = 'C' + (i + 1);
+            challengeHint.textContent = c.hint;
+            challengeHint.style.display = 'block';
+            challengeRetryBtn.style.display = 'block';
+        }
+        // ステージ番号の表示は読み込みのたびに上書きされるので、やり直し・墜落後も付け直す
+        onGameEvent(type => {
+            if (type === 'stageLoaded' && challenge.active) later(() => { if (challenge.active) document.getElementById('stage-num').textContent = 'C' + (challenge.index + 1); }, 0);
+        });
+        let challengeResult = null;
+        function closeChallengeResult() { if (challengeResult) { challengeResult.remove(); challengeResult = null; } }
+        function showChallengeResult(time, isBest) {
+            closeChallengeResult();
+            const i = challenge.index, hasNext = i < CHALLENGE_STAGES.length - 1;
+            const p = el('div', { class: 'cg-panel', id: 'challenge-result', style: 'top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 18px 22px; text-align: center; min-width: 260px;' }, [
+                el('h3', { text: `CHALLENGE ${i + 1} CLEAR` }),
+                el('div', { text: `${time.toFixed(2)}秒${isBest ? '（ベスト）' : ''}`, style: 'font-size: 20px; color: #ffcc66; margin: 6px 0 12px;' }),
+                el('div', {}, [
+                    el('button', { class: 'cg-btn', text: 'もう一回', onclick: () => startChallenge(i) }),
+                    hasNext ? el('button', { class: 'cg-btn', text: '次へ', onclick: () => startChallenge(i + 1) }) : null,
+                    el('button', { class: 'cg-btn', text: '一覧へ', onclick: () => { returnToTitle(); openChallengeList(); } })
+                ])
+            ]);
+            challengeResult = p;
+            document.body.appendChild(p);
+        }
+        onGameEvent((type, d) => {
+            if (type === 'title') {
+                challenge.active = false; challenge.index = -1;
+                challengeHint.style.display = 'none';
+                challengeRetryBtn.style.display = 'none';
+                closeChallengeResult();
+            }
+            if (type === 'stageClear' && challenge.active && d.label === 'CUSTOM') {
+                const c = CHALLENGE_STAGES[challenge.index];
+                const t = Math.round(d.clearTime * 100) / 100;
+                const prev = challengeSave.best[c.id];
+                const isBest = prev === undefined || t < prev;
+                if (isBest) { challengeSave.best[c.id] = t; storageSet(CHALLENGE_KEY, JSON.stringify(challengeSave)); }
+                if (CHALLENGE_STAGES.every(s => challengeSave.best[s.id])) unlock('challenge_all');
+                challengeRetryBtn.style.display = 'none';
+                later(() => showChallengeResult(t, isBest), 1200);
+            }
+        });
+        // タイトルのメニューに入口を足す（AUTO DEMO の前）
+        (function addChallengeMenu() {
+            const demoItem = document.getElementById('mode-demo-button').parentElement;
+            const item = el('div', { class: 'menu-item' }, [
+                el('button', { id: 'mode-challenge-button', class: 'sub-menu-button', text: 'チャレンジステージ' }),
+                el('p', { class: 'menu-desc', text: 'ギミックを使わないと解けない特別ステージ。' })
+            ]);
+            demoItem.parentElement.insertBefore(item, demoItem);
+            document.getElementById('mode-challenge-button').addEventListener('click', openChallengeList);
+        })();
 
     </script>
     <!-- FEATURES V2 END -->
